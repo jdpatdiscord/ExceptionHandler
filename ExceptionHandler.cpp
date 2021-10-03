@@ -1,6 +1,6 @@
 #include "./ExceptionHandler.hpp"
 
-HMODULE scriptwareDll = 0;
+HMODULE programDll = 0;
 
 std::string ExceptionManager::getBack(const std::string& s, char delim) {
 	std::stringstream ss(s);
@@ -93,13 +93,13 @@ std::string ExceptionManager::StackWalkReport(PEXCEPTION_POINTERS pExceptionReco
 		if (moduleBase == 0)
 		{
 			MODULEINFO swModuleInfo;
-			GetModuleInformation(GetCurrentProcess(), scriptwareDll, &swModuleInfo, sizeof(MODULEINFO));
-			if (stackFrame.AddrPC.Offset > (DWORD)scriptwareDll && stackFrame.AddrPC.Offset < (DWORD)scriptwareDll + swModuleInfo.SizeOfImage)
+			GetModuleInformation(GetCurrentProcess(), programDll, &swModuleInfo, sizeof(MODULEINFO));
+			if (stackFrame.AddrPC.Offset > (DWORD)programDll && stackFrame.AddrPC.Offset < (DWORD)programDll + swModuleInfo.SizeOfImage)
 			{
-				if (!GetModuleFileNameA(scriptwareDll, moduleName, sizeof moduleName))
+				if (!GetModuleFileNameA(programDll, moduleName, sizeof moduleName))
 				{
-					sprintf_s(moduleName, "ScriptwareClang.dll");
-					moduleBase = scriptwareDll;
+					sprintf_s(moduleName, "YourModuleNameHere.dll");
+					moduleBase = programDll;
 				}
 			}
 		}
@@ -221,11 +221,22 @@ std::string ExceptionManager::ResolveModuleFromAddress(DWORD Address)
 
 PCHAR ExceptionManager::GetExceptionSymbol(PEXCEPTION_POINTERS pExceptionRecord)
 {
+	// credit to raymond chen, now only if i could get the message within the exception and not just the symbol.
 	PDWORD L0 = (PDWORD)pExceptionRecord->ExceptionRecord->ExceptionInformation[2];
-	PDWORD L1 = (PDWORD)L0[3];
-	PDWORD L2 = (PDWORD)L1[1];
-	PCHAR Symbol = (PCHAR)(L2[1] + 8);
-	return Symbol;
+	if (L0 != NULL)
+	{
+		PDWORD L1 = (PDWORD)L0[3];
+		if (L1 != NULL)
+		{
+			PDWORD L2 = (PDWORD)L1[1];
+			if (L2 != NULL)
+			{
+				PCHAR Symbol = (PCHAR)(L2[1] + 8);
+				return Symbol;
+			}
+		}
+	}
+	return NULL;
 }
 
 BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptionRecord)
@@ -235,23 +246,26 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 
 	char UserMessage[8192];
 
-	PCHAR Symbol = nullptr;
+	PCHAR Symbol = NULL;
 	CHAR DecodedSymbol[512];
 
-	if (ExceptionCode == 0xe06d7363) /* Not caught in top level */
+	if (ExceptionCode == 0xe06d7363) /* C++ exception not caught in top level */
 	{
 		Symbol = GetExceptionSymbol(pExceptionRecord);
-		UnDecorateSymbolName(Symbol + 1, DecodedSymbol, sizeof DecodedSymbol, UNDNAME_NO_ARGUMENTS | UNDNAME_32_BIT_DECODE);
-		Symbol = DecodedSymbol;
+		if (Symbol != NULL)
+		{
+			UnDecorateSymbolName(Symbol + 1, DecodedSymbol, sizeof DecodedSymbol, UNDNAME_NO_ARGUMENTS | UNDNAME_32_BIT_DECODE);
+			Symbol = DecodedSymbol;
 
-		if (!strcmp("class std::runtime_error", Symbol))
-		{
-			//Log("valid exception %s\n", Symbol);
-		}
-		else
-		{
-			//Log("invalid exception %s\n", Symbol);
-			return TRUE;
+			if (!strcmp("class std::runtime_error", Symbol))
+			{
+				//Log("valid exception %s\n", Symbol);
+			}
+			else
+			{
+				//Log("invalid exception %s\n", Symbol);
+				return TRUE;
+			}
 		}
 	}
 	sprintf_s(
@@ -259,8 +273,6 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 
 		"[Code = 0x%08X]"      "\n"
 		"[ExceptSymbol = %s]"  "\n"
-		//"[StageInt = %s]"      "\n"
-		//"[StageScript = %s]"   "\n"
 		"[Eip = 0x%08X]"       "\n"
 		"[Eax = 0x%08X]"       "\n"
 		"[Ebx = 0x%08X]"       "\n"
@@ -276,8 +288,6 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 		"%s"
 		, ExceptionCode
 		, Symbol ? Symbol : "NoSym"
-		//, ExecutionStageInternal
-		//, ExecutionStageScript
 		, pExceptionRecord->ContextRecord->Eip
 		, pExceptionRecord->ContextRecord->Eax
 		, pExceptionRecord->ContextRecord->Ebx
@@ -287,7 +297,7 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 		, pExceptionRecord->ContextRecord->Edi
 		, pExceptionRecord->ContextRecord->Ebp
 		, pExceptionRecord->ContextRecord->Esp
-		, (DWORD)scriptwareDll
+		, (DWORD)programDll
 		, StackWalkReport(pExceptionRecord).c_str()
 	);
 
@@ -301,7 +311,7 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 		struct tm* now = localtime(&t);
 
 		char buffer[80];
-		strftime(buffer, 80, "%d-%m-%Y_%H-%M-%S_ScriptWareCrash.txt", now);
+		strftime(buffer, 80, "%d-%m-%Y_%H-%M-%S_ProgramCrash.txt", now);
 		return std::string(buffer);
 	};
 
@@ -391,5 +401,6 @@ void ExceptionManager::Init()
 	VectoredException RtlAddVectoredExceptionHandler = (VectoredException)GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlAddVectoredExceptionHandler");
 
 	RtlSetUnhandledExceptionFilter(TopLevelExceptionHandler);
-	//RtlAddVectoredExceptionHandler(0, VectoredExceptionHandler); /* only uncomment this line when dealing with nasty crashes that aren't caught by TopLevelExceptionHandler */
+	RtlAddVectoredExceptionHandler(0, VectoredExceptionHandler);
+	/* note: if you are using this exception handler and injecting it into an external application, it would be wise to comment out the VEH (RtlAddVectoredExceptionHandler) registration in order to avoid catching what will be handled exceptions in code outside of your control.
 }

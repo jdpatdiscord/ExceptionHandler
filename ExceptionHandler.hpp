@@ -10,7 +10,7 @@
 #include <filesystem>
 #include <sstream>
 
-extern HMODULE scriptwareDll;
+extern HMODULE programDll; // set this if you want the program to attempt to resolve what your module is when debug info is not available
 
 namespace ExceptionManager
 {
