@@ -402,5 +402,9 @@ void ExceptionManager::Init()
 
 	RtlSetUnhandledExceptionFilter(TopLevelExceptionHandler);
 	RtlAddVectoredExceptionHandler(0, VectoredExceptionHandler);
-	/* note: if you are using this exception handler and injecting it into an external application, it would be wise to comment out the VEH (RtlAddVectoredExceptionHandler) registration in order to avoid catching what will be handled exceptions in code outside of your control.
+	/* 
+	note: 
+	if you are using this exception handler and injecting it into an external application, 
+	it would be wise to comment out the VEH (RtlAddVectoredExceptionHandler) registration in order to avoid catching what will be handled exceptions in code outside of your control.
+	*/
 }
