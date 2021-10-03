@@ -256,16 +256,6 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 		{
 			UnDecorateSymbolName(Symbol + 1, DecodedSymbol, sizeof DecodedSymbol, UNDNAME_NO_ARGUMENTS | UNDNAME_32_BIT_DECODE);
 			Symbol = DecodedSymbol;
-
-			if (!strcmp("class std::runtime_error", Symbol))
-			{
-				//Log("valid exception %s\n", Symbol);
-			}
-			else
-			{
-				//Log("invalid exception %s\n", Symbol);
-				return TRUE;
-			}
 		}
 	}
 	sprintf_s(
