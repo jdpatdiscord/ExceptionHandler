@@ -239,6 +239,22 @@ PCHAR ExceptionManager::GetExceptionSymbol(PEXCEPTION_POINTERS pExceptionRecord)
 	return NULL;
 }
 
+PCHAR ExceptionManager::GetExceptionMessage(PEXCEPTION_POINTERS pExceptionRecord)
+{
+	PCHAR Message = NULL;
+
+	PDWORD L0 = (PDWORD)pExceptionRecord->ExceptionRecord->ExceptionInformation[1];
+	if (L0 != NULL)
+	{
+		Message = (PCHAR)L0[1];
+		if (Message == NULL)
+		{
+			Message = (PCHAR)L0[3];
+		}
+	}
+	return Message;
+}
+
 BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptionRecord)
 {
 	auto ExceptionAddress = pExceptionRecord->ExceptionRecord->ExceptionAddress;
@@ -247,6 +263,7 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 	char UserMessage[8192];
 
 	PCHAR Symbol = NULL;
+	PCHAR Message = NULL;
 	CHAR DecodedSymbol[512];
 
 	if (ExceptionCode == 0xe06d7363) /* C++ exception not caught in top level */
@@ -257,12 +274,14 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 			UnDecorateSymbolName(Symbol + 1, DecodedSymbol, sizeof DecodedSymbol, UNDNAME_NO_ARGUMENTS | UNDNAME_32_BIT_DECODE);
 			Symbol = DecodedSymbol;
 		}
+		Message = GetExceptionMessage(pExceptionRecord);
 	}
 	sprintf_s(
 		UserMessage,
 
 		"[Code = 0x%08X]"      "\n"
 		"[ExceptSymbol = %s]"  "\n"
+		"[Message = %s]"       "\n"
 		"[Eip = 0x%08X]"       "\n"
 		"[Eax = 0x%08X]"       "\n"
 		"[Ebx = 0x%08X]"       "\n"
@@ -278,6 +297,7 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 		"%s"
 		, ExceptionCode
 		, Symbol ? Symbol : "NoSym"
+		, Message ? Message : "NoMsg"
 		, pExceptionRecord->ContextRecord->Eip
 		, pExceptionRecord->ContextRecord->Eax
 		, pExceptionRecord->ContextRecord->Ebx
