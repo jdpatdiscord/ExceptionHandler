@@ -349,8 +349,8 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 	/* Check to see if a file already exists, because some users reported that the crash report disappeared when they went to get it later. */
 	/* the first crash report written at that very second is probably the relevant one. */
 
-	STARTUPINFOA stinfo;
-	PROCESS_INFORMATION prinfo;
+	STARTUPINFOA stinfo = { 0 }; // these being initialized as 0 is CRUCIAL!!! it will cause CreateProcess to fail if the data is garbage
+	PROCESS_INFORMATION prinfo = { 0 };
 	CreateProcessA(
 		"C:\\Windows\\System32\\notepad.exe",
 		(LPSTR)(("notepad.exe ") + fileName).c_str(),
