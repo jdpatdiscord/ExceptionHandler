@@ -17,6 +17,7 @@ namespace ExceptionManager
 	std::string getBack(const std::string& s, char delim);
 	std::string ResolveModuleFromAddress(DWORD Address);
 	PCHAR GetExceptionSymbol(PEXCEPTION_POINTERS pExceptionRecord);
+	PCHAR GetExceptionMessage(PEXCEPTION_POINTERS pExceptionRecord);
 	std::string StackWalkReport(PEXCEPTION_POINTERS pExceptionRecord);
 	BOOL ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptionRecord);
 	LONG WINAPI TopLevelExceptionHandler(PEXCEPTION_POINTERS pExceptionRecord);
