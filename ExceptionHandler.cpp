@@ -253,6 +253,7 @@ std::string ExceptionManager::ResolveModuleFromAddress(DWORD Address)
 
 PCHAR ExceptionManager::GetExceptionSymbol(PEXCEPTION_POINTERS pExceptionRecord)
 {
+	
 #if (INTPTR_MAX == INT32_MAX)
 	PDWORD L0 = (PDWORD)pExceptionRecord->ExceptionRecord->ExceptionInformation[2];
 	if (L0 != NULL)
@@ -270,6 +271,29 @@ PCHAR ExceptionManager::GetExceptionSymbol(PEXCEPTION_POINTERS pExceptionRecord)
 	}
 	return NULL;
 #elif (INTPTR_MAX == INT64_MAX)
+	if (auto pcount = pExceptionRecord->ExceptionRecord->NumberParameters; pcount >= 4)
+	{
+		if (auto syminfo = pExceptionRecord->ExceptionRecord->ExceptionInformation[2]; syminfo != NULL)
+		{
+			auto base = pExceptionRecord->ExceptionRecord->ExceptionInformation[3];
+			if (auto offset = *(DWORD*)(syminfo + 0x0C); offset != NULL)
+			{
+				auto sym_struct1 = base + offset;
+				if (sym_struct1 != NULL)
+				{
+					auto sym_struct2 = base + *(DWORD*)(sym_struct1 + 0x04);
+					if (sym_struct2 != NULL)
+					{
+						auto sym_struct3 = base + *(DWORD*)(sym_struct2 + 0x04);
+						if (sym_struct3 != NULL)
+						{
+							return (PCHAR)(sym_struct3 + 0x10);
+						}
+					}
+				}
+			}
+		}
+	}
 	return NULL;
 #endif
 }
@@ -290,6 +314,13 @@ PCHAR ExceptionManager::GetExceptionMessage(PEXCEPTION_POINTERS pExceptionRecord
 	}
 	return Message;
 #elif (INTPTR_MAX == INT64_MAX)
+	// screw the struct, gettin reclass medieval on it
+	std::uintptr_t pxc = (std::uintptr_t)pExceptionRecord;
+	std::uintptr_t pxc_0 = *(std::uintptr_t*)(pxc + 0);
+	if (std::uintptr_t pxc_0 = *(std::uintptr_t*)(pxc + 0); pxc_0 != NULL)
+		if (std::uintptr_t pxc_0_28 = *(std::uintptr_t*)(pxc_0 + 0x28); pxc_0_28 != NULL)
+			if (std::uintptr_t pxc_0_28_8 = *(std::uintptr_t*)(pxc_0_28 + 0x8); pxc_0_28_8 != NULL)
+				return (PCHAR)pxc_0_28_8;
 	return NULL;
 #endif
 }
