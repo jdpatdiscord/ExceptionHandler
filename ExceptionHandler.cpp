@@ -90,7 +90,11 @@ std::string ExceptionManager::StackWalkReport(PEXCEPTION_POINTERS pExceptionReco
 		symbol->MaxNameLength = 254;
 
 		DWORD32 offset;
+#if (INTPTR_MAX == INT32_MAX)
+		DWORD disp;
+#elif (INTPTR_MAX == INT64_MAX)
 		DWORD64 disp;
+#endif
 		symbolName = SymGetSymFromAddr(GetCurrentProcess(), stackFrame.AddrPC.Offset, &disp, symbol)
 			? symbol->Name : PCHAR("UnkSym");
 
@@ -310,11 +314,16 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 			UnDecorateSymbolName(Symbol + 1, DecodedSymbol, sizeof DecodedSymbol, UNDNAME_NO_ARGUMENTS);
 #endif
 			Symbol = DecodedSymbol;
+			if (std::find(std::begin(g_ehsettings.blacklist_sym), std::end(g_ehsettings.blacklist_sym), std::string(Symbol)) != std::end(g_ehsettings.blacklist_sym))
+			{
+				return TRUE;
+			}
 		}
 		Message = GetExceptionMessage(pExceptionRecord);
 	}
 	sprintf_s(
-		g_ehreportbuffer,
+		g_ehsettings.report_dst,
+		g_ehsettings.report_dst_size,
 		"[Code = 0x%08X]"      "\n"
 		"[ExceptSymbol = %s]"  "\n"
 		"[Message = %s]"       "\n"
@@ -412,7 +421,13 @@ void ExceptionManager::Init(EHSettings* settings)
 	g_ehsettings = *settings;
 	if (g_ehsettings.report_dst == NULL) g_ehsettings.report_dst = g_ehreportbuffer;
 	if (g_ehsettings.report_dst_size == NULL) g_ehsettings.report_dst_size = EH_REPORTSIZE;
-
+	if (g_ehsettings.prog_base != NULL && g_ehsettings.prog_size == NULL)
+	{
+		/* todo: look into whether MODULEINFO::lpBaseOfDll actually means it has to be a DLL base? */
+		MODULEINFO mi;
+		GetModuleInformation(GetCurrentProcess(), (HMODULE)g_ehsettings.prog_base, &mi, sizeof(MODULEINFO));
+		g_ehsettings.prog_size = mi.SizeOfImage;
+	}
 	if (g_ehsettings.use_seh == true) 
 	{
 		typedef VOID(WINAPI* TopLevelException)(LPTOP_LEVEL_EXCEPTION_FILTER lpTopLevelExceptionFilter);
