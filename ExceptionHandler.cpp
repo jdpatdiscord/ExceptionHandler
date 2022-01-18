@@ -1,7 +1,20 @@
 #include "./ExceptionHandler.hpp"
 
+std::uintptr_t PeParser::get_image_base(std::uintptr_t module_base)
+{
+	PIMAGE_DOS_HEADER p_dos_hdr = (PIMAGE_DOS_HEADER)module_base;
+	if (p_dos_hdr->e_magic == IMAGE_DOS_SIGNATURE)
+	{
+		PIMAGE_NT_HEADERS p_nt_hdr = (PIMAGE_NT_HEADERS)((PCHAR)p_dos_hdr + p_dos_hdr->e_lfanew);
+		if (p_nt_hdr->Signature == IMAGE_NT_SIGNATURE)
+		{
+			return p_nt_hdr->OptionalHeader.ImageBase;
+		}
+	}
+}
+
 ExceptionManager::EHSettings ExceptionManager::g_ehsettings;
-char ExceptionManager::g_ehreportbuffer[16384];
+char ExceptionManager::g_ehreportbuffer[EH_REPORTSIZE];
 
 std::string ExceptionManager::getBack(const std::string& s, char delim) {
 	std::stringstream ss(s);
@@ -74,10 +87,10 @@ std::string ExceptionManager::StackWalkReport(PEXCEPTION_POINTERS pExceptionReco
 		PCHAR fileName;
 		DWORD lineNumber;
 
-		HMODULE moduleBase = (HMODULE)SymGetModuleBase(GetCurrentProcess(), stackFrame.AddrPC.Offset);
-		if (moduleBase)
+		HMODULE module_mem_base = (HMODULE)SymGetModuleBase(GetCurrentProcess(), stackFrame.AddrPC.Offset);
+		if (module_mem_base)
 		{
-			GetModuleFileNameA(moduleBase, moduleName, MAX_PATH);
+			GetModuleFileNameA(module_mem_base, moduleName, MAX_PATH);
 		}
 		else
 		{
@@ -112,24 +125,9 @@ std::string ExceptionManager::StackWalkReport(PEXCEPTION_POINTERS pExceptionReco
 			lineNumber = 0;
 		}
 
-		if (moduleBase == 0)
-		{
-			MODULEINFO swModuleInfo;
-			GetModuleInformation(GetCurrentProcess(), (HMODULE)g_ehsettings.prog_base, &swModuleInfo, sizeof(MODULEINFO));
-			if (stackFrame.AddrPC.Offset > (std::uintptr_t)g_ehsettings.prog_base && stackFrame.AddrPC.Offset < (std::uintptr_t)g_ehsettings.prog_base + swModuleInfo.SizeOfImage)
-			{
-				if (!GetModuleFileNameA((HMODULE)g_ehsettings.prog_base, moduleName, sizeof moduleName))
-				{
-					sprintf_s(moduleName, g_ehsettings.prog_name.value().c_str());
-					moduleBase = (HMODULE)g_ehsettings.prog_base;
-				}
-			}
-		}
-#if (INTPTR_MAX == INT32_MAX)
-		std::uintptr_t normalizedAddress = stackFrame.AddrPC.Offset - (DWORD32)moduleBase + (g_ehsettings.is_prog_dll ? 0x10000000 : 0x400000);
-#elif (INTPTR_MAX == INT64_MAX)
-		std::uintptr_t normalizedAddress = stackFrame.AddrPC.Offset - (DWORD64)moduleBase + (g_ehsettings.is_prog_dll ? 0x180000000 : 0x140000000);
-#endif
+		std::uintptr_t module_image_base = PeParser::get_image_base((std::uintptr_t)module_mem_base);
+		printf("addrpc: 0x%016llX, modmem: 0x%016llX, imbase: 0x%016llX\n", stackFrame.AddrPC.Offset, module_mem_base, module_image_base);
+		std::uintptr_t file_address = stackFrame.AddrPC.Offset - (std::uintptr_t)module_mem_base + module_image_base;
 
 		CHAR tempFileInfoString[192];
 		CHAR tempModuleInfoString[MAX_PATH];
@@ -139,16 +137,16 @@ std::string ExceptionManager::StackWalkReport(PEXCEPTION_POINTERS pExceptionReco
 		CHAR tempBaseAddrString[64];
 
 		sprintf_s(tempFileInfoString, "[File: %s]", getBack(fileName, '\\').c_str());
-		sprintf_s(tempModuleInfoString, sizeof tempModuleInfoString, moduleBase != 0 ? "[Module: %s]" : "", getBack(moduleName, '\\').c_str());
+		sprintf_s(tempModuleInfoString, sizeof tempModuleInfoString, module_mem_base != 0 ? "[Module: %s]" : "", getBack(moduleName, '\\').c_str());
 		sprintf_s(tempLineInfoString, lineNumber != 0 ? "[Line: %i]" : "", lineNumber);
 #if (INTPTR_MAX == INT32_MAX)
 		sprintf_s(tempDynAddrString, "[DynamicAddr: 0x%08X]", normalizedAddress);
 		sprintf_s(tempConstAddrString, "[RebaseAddr: 0x%08X]", normalizedAddress);
 		sprintf_s(tempBaseAddrString, "[BaseAddr: 0x%08X]", (std::uintptr_t)moduleBase);
 #elif (INTPTR_MAX == INT64_MAX)
-		sprintf_s(tempDynAddrString, "[DynamicAddr: 0x%016llX]", normalizedAddress);
-		sprintf_s(tempConstAddrString, "[RebaseAddr: 0x%016llX]", normalizedAddress);
-		sprintf_s(tempBaseAddrString, "[BaseAddr: 0x%016llX]", (std::uintptr_t)moduleBase);
+		sprintf_s(tempDynAddrString, "[DynamicAddr: 0x%016llX]", file_address);
+		sprintf_s(tempConstAddrString, "[RebaseAddr: 0x%016llX]", file_address);
+		sprintf_s(tempBaseAddrString, "[BaseAddr: 0x%016llX]", (std::uintptr_t)module_mem_base);
 #endif
 
 		fileInfoStrMax = fileInfoStrMax < (fileInfoStrTemp = strlen(tempFileInfoString)) ? fileInfoStrTemp : fileInfoStrMax;
@@ -162,8 +160,8 @@ std::string ExceptionManager::StackWalkReport(PEXCEPTION_POINTERS pExceptionReco
 			tempFileInfoString,
 			tempModuleInfoString,
 			lineNumber != 0 ? tempLineInfoString : "",
-			moduleBase == 0 ? tempDynAddrString : tempConstAddrString,
-			moduleBase != 0 ? tempBaseAddrString : "" // if empty, omit
+			module_mem_base == 0 ? tempDynAddrString : tempConstAddrString,
+			module_mem_base != 0 ? tempBaseAddrString : "" // if empty, omit
 		};
 
 		reportStringParseCache.push_back(stringParseVector);
@@ -253,7 +251,6 @@ std::string ExceptionManager::ResolveModuleFromAddress(DWORD Address)
 
 PCHAR ExceptionManager::GetExceptionSymbol(PEXCEPTION_POINTERS pExceptionRecord)
 {
-	
 #if (INTPTR_MAX == INT32_MAX)
 	PDWORD L0 = (PDWORD)pExceptionRecord->ExceptionRecord->ExceptionInformation[2];
 	if (L0 != NULL)
@@ -414,7 +411,7 @@ BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptio
 		, StackWalkReport(pExceptionRecord).c_str()
 	);
 
-	g_ehsettings.callback({g_ehreportbuffer, strlen(g_ehreportbuffer), strlen(g_ehreportbuffer) == EH_REPORTSIZE});
+	g_ehsettings.recv_callback({g_ehreportbuffer, strlen(g_ehreportbuffer), strlen(g_ehreportbuffer) >= EH_REPORTSIZE});
 
 	return FALSE;
 }
