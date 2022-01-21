@@ -23,12 +23,12 @@ namespace PeParser
 
 std::string SStr_format(const char* fmt, ...);
 
-#define EH_STRREG(EHREG) {#EHREG, EHREG, sizeof(EHREG)}
+#define EH_STRREG(EHREG) {#EHREG, EHREG, sizeof(decltype(EHREG))}
 #define EH_XMMSTRREG(EHARRAY, EHINDEX) { "Xmm" #EHINDEX "_HI", EHARRAY[EHINDEX].High}, {"Xmm" #EHINDEX "_LO", EHARRAY[EHINDEX].Low}
 
 namespace ExceptionManager
 {
-	typedef std::tuple<std::string, std::uintptr_t, std::size_t> EHRegister;
+	typedef std::tuple<std::string, std::uint64_t, std::size_t> EHRegister;
 
 	struct EHStackWalkLine
 	{

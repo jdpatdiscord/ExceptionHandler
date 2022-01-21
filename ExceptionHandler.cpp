@@ -94,7 +94,7 @@ ExceptionManager::EHFinishedReport ExceptionManager::DefaultProcessor(ExceptionM
 		}
 		if (reg_size == 8)
 		{
-			string_register_list += SStr_format("8-byte register %s: 0x%016X\n", reg_name.c_str(), reg_value);
+			string_register_list += SStr_format("8-byte register %s: 0x%016llX\n", reg_name.c_str(), reg_value);
 		}
 	}
 	string_register_list += "\n";
@@ -181,7 +181,7 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 	stackFrame.AddrStack.Offset = pExceptionRecord->ContextRecord->Rsp;
 	stackFrame.AddrFrame.Offset = pExceptionRecord->ContextRecord->Rbp;
 
-	DWORD Rax = pExceptionRecord->ContextRecord->Rax,
+	DWORD64 Rax = pExceptionRecord->ContextRecord->Rax,
 		Rbx = pExceptionRecord->ContextRecord->Rbx,
 		Rcx = pExceptionRecord->ContextRecord->Rcx,
 		Rdx = pExceptionRecord->ContextRecord->Rdx,
