@@ -21,38 +21,56 @@ namespace PeParser
 	std::uintptr_t get_image_base(std::uintptr_t module_base);
 }
 
+std::string SStr_format(const char* fmt, ...);
+
+#define EH_STRREG(EHREG) {#EHREG, EHREG, sizeof(EHREG)}
+#define EH_XMMSTRREG(EHARRAY, EHINDEX) { "Xmm" #EHINDEX "_HI", EHARRAY[EHINDEX].High}, {"Xmm" #EHINDEX "_LO", EHARRAY[EHINDEX].Low}
+
 namespace ExceptionManager
 {
-	typedef std::pair<std::string, std::uintptr_t> EHRegister;
+	typedef std::tuple<std::string, std::uintptr_t, std::size_t> EHRegister;
 
 	struct EHStackWalkLine
 	{
-		std::uintptr_t module_base_address;
 		std::uintptr_t address;
-		std::string module_name;
-		std::string source_file_name;
-		std::int32_t line;
-	};
-
-	struct EHUnfinishedReport
-	{
-		std::vector<EHStackWalkLine> complete_callstack;
-		std::vector<EHRegister> register_list;
-		std::uint32_t eh_exception_code;
-		std::string eh_cpp_exception_name;
-		std::string eh_cpp_exception_message;
-		std::string eh_psuedo_name;
+		std::optional<std::uintptr_t> module_base_address;
+		std::optional<std::string> module_name;
+		std::optional<std::string> source_file_name;
+		std::optional<std::string> function_symbol;
+		std::optional<std::int32_t> line;
 	};
 
 	struct EHCompiledReport
 	{
+		std::vector<EHStackWalkLine> complete_callstack;
+		std::vector<EHRegister> register_list;
+		std::uint32_t eh_exception_code;
+		std::uintptr_t eh_fault_address;
+		std::string eh_psuedo_name;
+		std::optional<std::string> eh_cpp_exception_symbol;
+		std::optional<std::string> eh_cpp_exception_message;
+
+		bool should_ignore;
+	};
+
+	struct EHFinishedReport
+	{
 		char* report_string;
 		size_t report_size;
 		bool clipped;
+		bool should_free;
+
+		EHFinishedReport(char* report_string, size_t report_size, bool clipped, bool should_free)
+			: report_string(report_string), report_size(report_size), clipped(clipped), should_free(should_free) { }
+
+		EHFinishedReport()
+		{
+			memset(this, 0, sizeof *this);
+		}
 	};
 
-	typedef void(*eh_receiver_callback)(EHCompiledReport);
-	typedef std::string(*eh_processor_callback)(EHUnfinishedReport);
+	typedef void(*eh_receiver_callback)(EHFinishedReport);
+	typedef EHFinishedReport(*eh_processor_callback)(EHCompiledReport);
 
 	struct EHSettings
 	{
@@ -75,12 +93,15 @@ namespace ExceptionManager
 
 	void Init(EHSettings* settings);
 
+	EHFinishedReport DefaultProcessor(EHCompiledReport report);
+	void DefaultHandler(EHFinishedReport report);
+
 	std::string getBack(const std::string& s, char delim);
 	std::string ResolveModuleFromAddress(DWORD Address);
-	std::string StackWalkReport(PEXCEPTION_POINTERS pExceptionRecord);
+	EHCompiledReport GenerateReport(PEXCEPTION_POINTERS pExceptionRecord);
 	PCHAR GetExceptionSymbol(PEXCEPTION_POINTERS pExceptionRecord);
 	PCHAR GetExceptionMessage(PEXCEPTION_POINTERS pExceptionRecord);
-	BOOL ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptionRecord);
+	BOOL ProcessException(bool isVEH, PEXCEPTION_POINTERS pExceptionRecord);
 	LONG WINAPI TopLevelExceptionHandler(PEXCEPTION_POINTERS pExceptionRecord);
 	LONG WINAPI VectoredExceptionHandler(PEXCEPTION_POINTERS pExceptionRecord);
 };

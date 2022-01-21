@@ -13,6 +13,43 @@ std::uintptr_t PeParser::get_image_base(std::uintptr_t module_base)
 	}
 }
 
+std::string SStr_format(const char* fmt, ...)
+{
+	char buf[256];
+
+	va_list args;
+	va_start(args, fmt);
+	const auto r = std::vsnprintf(buf, sizeof buf, fmt, args);
+	va_end(args);
+
+	if (r < 0)
+		// conversion failed
+		return {};
+
+	const size_t len = r;
+	if (len < sizeof buf)
+		// we fit in the buffer
+		return { buf, len };
+
+#if __cplusplus >= 201703L
+	// C++17: Create a string and write to its underlying array
+	std::string s(len, '\0');
+	va_start(args, fmt);
+	std::vsnprintf(s.data(), len + 1, fmt, args);
+	va_end(args);
+
+	return s;
+#else
+	// C++11 or C++14: We need to allocate scratch memory
+	auto vbuf = std::unique_ptr<char[]>(new char[len + 1]);
+	va_start(args, fmt);
+	std::vsnprintf(vbuf.get(), len + 1, fmt, args);
+	va_end(args);
+
+	return { vbuf.get(), len };
+#endif
+}
+
 ExceptionManager::EHSettings ExceptionManager::g_ehsettings;
 char ExceptionManager::g_ehreportbuffer[EH_REPORTSIZE];
 
@@ -25,12 +62,93 @@ std::string ExceptionManager::getBack(const std::string& s, char delim) {
 	return item;
 }
 
-std::string ExceptionManager::StackWalkReport(PEXCEPTION_POINTERS pExceptionRecord)
+ExceptionManager::EHFinishedReport ExceptionManager::DefaultProcessor(ExceptionManager::EHCompiledReport report)
 {
-	std::stringstream StackWalkReport;
+	std::string string_trace = "";
+	std::string string_register_list = "";
 
+	for (auto& stack_line : report.complete_callstack)
+	{
+		std::string string_address = SStr_format("0x%p", stack_line.module_base_address.has_value() ? stack_line.module_base_address.value() : NULL);
+		std::string string_module_name = stack_line.module_name.has_value() ? stack_line.module_name.value().c_str() : string_address.c_str();
+
+		std::string string_line = SStr_format(
+			"Addr: (%s) + 0x%p, Base: 0x%p, Line: %i, Func: %s, File: %s\n",
+			string_module_name.c_str(),
+			stack_line.address,
+			stack_line.module_base_address.has_value() ? stack_line.module_base_address.value() : NULL,
+			stack_line.line.has_value() ? stack_line.line.value() : -1,
+			stack_line.function_symbol.has_value() ? stack_line.function_symbol.value().c_str() : "NoFunc",
+			stack_line.source_file_name.has_value() ? stack_line.source_file_name.value().c_str() : "NoFile"
+		);
+
+		string_trace += string_line;
+	}
+
+	for (auto& reg : report.register_list)
+	{
+		auto &[reg_name, reg_value, reg_size] = reg;
+		if (reg_size == 4)
+		{
+			string_register_list += SStr_format("4-byte register %s: 0x%08X\n", reg_name.c_str(), reg_value);
+		}
+		if (reg_size == 8)
+		{
+			string_register_list += SStr_format("8-byte register %s: 0x%016X\n", reg_name.c_str(), reg_value);
+		}
+	}
+	string_register_list += "\n";
+
+	std::string string_address = SStr_format((INTPTR_MAX == INT64_MAX) ? "%016llX" : "%08X", report.eh_fault_address);
+	std::string string_symbol = report.eh_cpp_exception_symbol.has_value() ? SStr_format("ExceptionSymbol: %s\n", report.eh_cpp_exception_symbol.value().c_str()) : "";
+	std::string string_message = report.eh_cpp_exception_message.has_value() ? SStr_format("ExceptionMessage: %s\n", report.eh_cpp_exception_message.value().c_str()) : "";
+	std::string report_header = SStr_format(
+		"ExceptionCode: %08X\n"
+		"ExceptionAddress: %s\n"
+		"%s" // exception symbol
+		"%s" // exception message
+		"%s" // register list
+		"%s" // stack trace
+		, report.eh_exception_code
+		, string_address.c_str()
+		, string_symbol.c_str()
+		, string_message.c_str()
+		, string_register_list.c_str()
+		, string_trace.c_str()
+	);
+
+	char* report_buf = (char*)malloc(report_header.size() + 1);
+	if (report_buf != NULL)
+	{
+		memset(report_buf, 0, report_header.size() + 1);
+		memcpy(report_buf, report_header.c_str(), report_header.size());
+		return { report_buf, report_header.size(), false, true };
+	}
+	else
+	{
+		return { (char*)"OOM", 3, false, false }; // 3AM code but it works so
+	};
+}
+
+void ExceptionManager::DefaultHandler(ExceptionManager::EHFinishedReport report)
+{
+	printf("%.*s\n", report.report_size, report.report_string);
+
+	if (report.should_free == true)
+	{
+		free(report.report_string);
+	}
+
+	Sleep(UINT_MAX);
+	return;
+}
+
+ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_POINTERS pExceptionRecord)
+{
 	STACKFRAME stackFrame;
 	memset(&stackFrame, 0, sizeof(STACKFRAME));
+
+	EHCompiledReport eh_report;
 
 #if (INTPTR_MAX == INT32_MAX)
 	stackFrame.AddrPC.Offset = pExceptionRecord->ContextRecord->Eip;
@@ -42,7 +160,22 @@ std::string ExceptionManager::StackWalkReport(PEXCEPTION_POINTERS pExceptionReco
 		Ecx = pExceptionRecord->ContextRecord->Ecx,
 		Edx = pExceptionRecord->ContextRecord->Edx,
 		Esi = pExceptionRecord->ContextRecord->Esi,
-		Edi = pExceptionRecord->ContextRecord->Edi;
+		Edi = pExceptionRecord->ContextRecord->Edi,
+		Eip = pExceptionRecord->ContextRecord->Eip,
+		Esp = pExceptionRecord->ContextRecord->Esp,
+		Ebp = pExceptionRecord->ContextRecord->Ebp;
+
+	eh_report.register_list = {
+		EH_STRREG(Eax),
+		EH_STRREG(Ebx),
+		EH_STRREG(Ecx),
+		EH_STRREG(Edx),
+		EH_STRREG(Edi),
+		EH_STRREG(Esi),
+		EH_STRREG(Eip),
+		EH_STRREG(Esp),
+		EH_STRREG(Ebp)
+	};
 #elif (INTPTR_MAX == INT64_MAX)
 	stackFrame.AddrPC.Offset = pExceptionRecord->ContextRecord->Rip;
 	stackFrame.AddrStack.Offset = pExceptionRecord->ContextRecord->Rsp;
@@ -53,7 +186,22 @@ std::string ExceptionManager::StackWalkReport(PEXCEPTION_POINTERS pExceptionReco
 		Rcx = pExceptionRecord->ContextRecord->Rcx,
 		Rdx = pExceptionRecord->ContextRecord->Rdx,
 		Rsi = pExceptionRecord->ContextRecord->Rsi,
-		Rdi = pExceptionRecord->ContextRecord->Rdi;
+		Rdi = pExceptionRecord->ContextRecord->Rdi,
+		Rip = pExceptionRecord->ContextRecord->Rip,
+		Rsp = pExceptionRecord->ContextRecord->Rsp,
+		Rbp = pExceptionRecord->ContextRecord->Rbp;
+
+	eh_report.register_list = {
+		EH_STRREG(Rax),
+		EH_STRREG(Rbx),
+		EH_STRREG(Rcx),
+		EH_STRREG(Rdx),
+		EH_STRREG(Rdi),
+		EH_STRREG(Rsi),
+		EH_STRREG(Rip),
+		EH_STRREG(Rsp),
+		EH_STRREG(Rbp)
+	};
 #endif
 
 	stackFrame.AddrPC.Mode = AddrModeFlat;
@@ -62,19 +210,13 @@ std::string ExceptionManager::StackWalkReport(PEXCEPTION_POINTERS pExceptionReco
 
 	SymInitialize(GetCurrentProcess(), NULL, TRUE);
 
-	std::vector<std::vector<std::string>> reportStringParseCache {};
-
-	size_t fileInfoStrMax = 0, fileInfoStrTemp = 0;
-	size_t moduleInfoStrMax = 0, moduleInfoStrTemp = 0;
-	size_t lineNumberStrMax = 0, lineNumberStrTemp = 0;
-	size_t dynAddrStrMax = 0, dynAddrStrTemp = 0;
-	size_t constAddrStrMax = 0, constAddrStrTemp = 0;
-	size_t baseAddrStrMax = 0, baseAddrStrTemp = 0;
 	/* 0: file info
 	   1: module info
 	   2: line number or ""
 	   3: dyn or static addr
 	   4: base addr or 0      */
+
+	std::vector<EHStackWalkLine> eh_callstack;
 
 #if (INTPTR_MAX == INT32_MAX)
 	while (StackWalk(IMAGE_FILE_MACHINE_I386, GetCurrentProcess(), GetCurrentThread(), &stackFrame, pExceptionRecord->ContextRecord, NULL, SymFunctionTableAccess, SymGetModuleBase, NULL))
@@ -82,136 +224,111 @@ std::string ExceptionManager::StackWalkReport(PEXCEPTION_POINTERS pExceptionReco
 	while (StackWalk64(IMAGE_FILE_MACHINE_AMD64, GetCurrentProcess(), GetCurrentThread(), &stackFrame, pExceptionRecord->ContextRecord, NULL, SymFunctionTableAccess, SymGetModuleBase, NULL))
 #endif
 	{
-		CHAR moduleName[MAX_PATH];
+		EHStackWalkLine this_call;
+
+		CHAR module_name[MAX_PATH];
 		PCHAR symbolName;
-		PCHAR fileName;
-		DWORD lineNumber;
+		PCHAR file_name;
+		DWORD line_number;
 
 		HMODULE module_mem_base = (HMODULE)SymGetModuleBase(GetCurrentProcess(), stackFrame.AddrPC.Offset);
 		if (module_mem_base)
 		{
-			GetModuleFileNameA(module_mem_base, moduleName, MAX_PATH);
+			GetModuleFileNameA(module_mem_base, module_name, MAX_PATH);
+			this_call.module_base_address = (uintptr_t)module_mem_base;
+			this_call.module_name = module_name;
 		}
-		else
-		{
-			sprintf_s(moduleName, "UnkMod");
-		}
-
-		CHAR symbolBuf[sizeof(IMAGEHLP_SYMBOL) + 255];
-		PIMAGEHLP_SYMBOL symbol = (PIMAGEHLP_SYMBOL)symbolBuf;
-		symbol->SizeOfStruct = sizeof symbolBuf;
-		symbol->MaxNameLength = 254;
 
 		DWORD32 offset;
-#if (INTPTR_MAX == INT32_MAX)
-		DWORD disp;
-#elif (INTPTR_MAX == INT64_MAX)
-		DWORD64 disp;
-#endif
-		symbolName = SymGetSymFromAddr(GetCurrentProcess(), stackFrame.AddrPC.Offset, &disp, symbol)
-			? symbol->Name : PCHAR("UnkSym");
-
 		IMAGEHLP_LINE line;
 		line.SizeOfStruct = sizeof line;
 
 		if (SymGetLineFromAddr(GetCurrentProcess(), stackFrame.AddrPC.Offset, (PDWORD)&offset, &line))
 		{
-			fileName = line.FileName;
-			lineNumber = line.LineNumber;
-		}
-		else
-		{
-			fileName = PCHAR("UnkFile");
-			lineNumber = 0;
+			file_name = line.FileName;
+			line_number = line.LineNumber;
+
+			this_call.source_file_name = file_name;
+			this_call.line = line_number;
 		}
 
-		std::uintptr_t module_image_base = PeParser::get_image_base((std::uintptr_t)module_mem_base);
-		printf("addrpc: 0x%016llX, modmem: 0x%016llX, imbase: 0x%016llX\n", stackFrame.AddrPC.Offset, module_mem_base, module_image_base);
-		std::uintptr_t file_address = stackFrame.AddrPC.Offset - (std::uintptr_t)module_mem_base + module_image_base;
+		CHAR symbolBuf[sizeof(IMAGEHLP_SYMBOL) + 0xFF];
+		PIMAGEHLP_SYMBOL symbol = (PIMAGEHLP_SYMBOL)symbolBuf;
+		symbol->SizeOfStruct = sizeof symbolBuf;
+		symbol->MaxNameLength = 0xFE;
 
-		CHAR tempFileInfoString[192];
-		CHAR tempModuleInfoString[MAX_PATH];
-		CHAR tempLineInfoString[48];
-		CHAR tempDynAddrString[64];
-		CHAR tempConstAddrString[64];
-		CHAR tempBaseAddrString[64];
-
-		sprintf_s(tempFileInfoString, "[File: %s]", getBack(fileName, '\\').c_str());
-		sprintf_s(tempModuleInfoString, sizeof tempModuleInfoString, module_mem_base != 0 ? "[Module: %s]" : "", getBack(moduleName, '\\').c_str());
-		sprintf_s(tempLineInfoString, lineNumber != 0 ? "[Line: %i]" : "", lineNumber);
 #if (INTPTR_MAX == INT32_MAX)
-		sprintf_s(tempDynAddrString, "[DynamicAddr: 0x%08X]", normalizedAddress);
-		sprintf_s(tempConstAddrString, "[RebaseAddr: 0x%08X]", normalizedAddress);
-		sprintf_s(tempBaseAddrString, "[BaseAddr: 0x%08X]", (std::uintptr_t)moduleBase);
+		DWORD32 disp;
+		if (SymGetSymFromAddr(GetCurrentProcess(), stackFrame.AddrPC.Offset, (PDWORD)&disp, symbol))
+		{
 #elif (INTPTR_MAX == INT64_MAX)
-		sprintf_s(tempDynAddrString, "[DynamicAddr: 0x%016llX]", file_address);
-		sprintf_s(tempConstAddrString, "[RebaseAddr: 0x%016llX]", file_address);
-		sprintf_s(tempBaseAddrString, "[BaseAddr: 0x%016llX]", (std::uintptr_t)module_mem_base);
+		DWORD64 disp;
+		if (SymGetSymFromAddr(GetCurrentProcess(), stackFrame.AddrPC.Offset, (PDWORD64)&disp, symbol))
+		{
 #endif
+			this_call.function_symbol = symbol->Name;
+		}
 
-		fileInfoStrMax = fileInfoStrMax < (fileInfoStrTemp = strlen(tempFileInfoString)) ? fileInfoStrTemp : fileInfoStrMax;
-		moduleInfoStrMax = moduleInfoStrMax < (moduleInfoStrTemp = strlen(tempModuleInfoString)) ? moduleInfoStrTemp : moduleInfoStrMax;
-		lineNumberStrMax = lineNumberStrMax < (lineNumberStrTemp = strlen(tempLineInfoString)) ? lineNumberStrTemp : lineNumberStrMax;
-		dynAddrStrMax = dynAddrStrMax < (dynAddrStrTemp = strlen(tempDynAddrString)) ? dynAddrStrTemp : dynAddrStrMax;
-		constAddrStrMax = constAddrStrMax < (constAddrStrTemp = strlen(tempConstAddrString)) ? constAddrStrTemp : constAddrStrMax;
-		baseAddrStrMax = baseAddrStrMax < (baseAddrStrTemp = strlen(tempBaseAddrString)) ? baseAddrStrTemp : baseAddrStrMax;
+		std::uintptr_t file_address = stackFrame.AddrPC.Offset - (std::uintptr_t)module_mem_base;
 
-		std::vector<std::string> stringParseVector{
-			tempFileInfoString,
-			tempModuleInfoString,
-			lineNumber != 0 ? tempLineInfoString : "",
-			module_mem_base == 0 ? tempDynAddrString : tempConstAddrString,
-			module_mem_base != 0 ? tempBaseAddrString : "" // if empty, omit
-		};
+		this_call.address = file_address;
 
-		reportStringParseCache.push_back(stringParseVector);
+		eh_callstack.push_back(this_call);
+	}
+
+	eh_report.complete_callstack = eh_callstack;
+	eh_report.eh_fault_address = (std::uintptr_t)pExceptionRecord->ExceptionRecord->ExceptionAddress;
+	eh_report.eh_exception_code = (std::uint32_t)pExceptionRecord->ExceptionRecord->ExceptionCode;
+	
+	if (eh_report.eh_exception_code == 0xE06D7363)
+	{
+		PCHAR temp_symbol = NULL;
+		PCHAR temp_message = NULL;
+		CHAR exception_symbol[512];
+
+		temp_symbol = GetExceptionSymbol(pExceptionRecord);
+		if (temp_symbol != NULL)
+		{
+#if (INTPTR_MAX == INT32_MAX)
+			UnDecorateSymbolName(temp_symbol + 1, exception_symbol, sizeof exception_symbol, UNDNAME_NO_ARGUMENTS | UNDNAME_32_BIT_DECODE);
+#elif (INTPTR_MAX == INT64_MAX)
+			UnDecorateSymbolName(temp_symbol + 1, exception_symbol, sizeof exception_symbol, UNDNAME_NO_ARGUMENTS);
+#endif
+			temp_symbol = exception_symbol;
+
+			if (std::find(std::begin(g_ehsettings.blacklist_sym), std::end(g_ehsettings.blacklist_sym), std::string(temp_symbol)) != std::end(g_ehsettings.blacklist_sym))
+			{
+				eh_report.should_ignore = true;
+			}
+
+			eh_report.eh_cpp_exception_symbol = std::string(temp_symbol);
+		}
+
+		temp_message = GetExceptionMessage(pExceptionRecord);
+		if (temp_message != NULL)
+		{
+			eh_report.eh_cpp_exception_message = std::string(temp_message);
+		}
 	}
 
 	SymCleanup(GetCurrentProcess());
 
-	CHAR stackWalkReportLine[480];
+#if (INTPTR_MAX == INT64_MAX)
+	// ill figure out how to get xmm registers working on 32 bit later
 
-	for (std::vector<std::string>& stackFrameReportLine : reportStringParseCache)
+	unsigned n_xmm = (INTPTR_MAX == INT64_MAX) ? 16 : 8;
+
+	for (unsigned reg = 0; reg < n_xmm; ++reg)
 	{
-		memset(stackWalkReportLine, 0, sizeof stackWalkReportLine);
-		/* 0: file info
-		   1: module info
-		   2: line number or ""
-		   3: dyn or static addr
-		   4: base addr or 0      */
-
-		const std::string& fileInfo = stackFrameReportLine[0];
-		const std::string& moduleInfo = stackFrameReportLine[1];
-		const std::string& lineNumber = stackFrameReportLine[2];
-		const std::string& addrInfo = stackFrameReportLine[3];
-		const std::string& baseAddrInfo = stackFrameReportLine[4];
-
-		std::string fmtFileInfo(fileInfoStrMax, ' ');
-		std::string fmtModuleInfo(moduleInfoStrMax, ' ');
-		std::string fmtLineNumber(lineNumberStrMax, ' ');
-		std::string fmtAddrInfo(dynAddrStrMax > constAddrStrMax ? dynAddrStrMax : constAddrStrMax, ' ');
-		std::string fmtBaseAddrInfo(baseAddrStrMax, ' ');
-
-		memcpy((void*)fmtFileInfo.c_str(), fileInfo.c_str(), fileInfo.size());
-		memcpy((void*)fmtModuleInfo.c_str(), moduleInfo.c_str(), moduleInfo.size());
-		memcpy((void*)fmtLineNumber.c_str(), lineNumber.c_str(), lineNumber.size());
-		memcpy((void*)fmtAddrInfo.c_str(), addrInfo.c_str(), addrInfo.size());
-		memcpy((void*)fmtBaseAddrInfo.c_str(), baseAddrInfo.c_str(), baseAddrInfo.size());
-
-		sprintf_s(
-			stackWalkReportLine,
-			"%s %s %s %s %s"
-			, fmtFileInfo.c_str()
-			, fmtModuleInfo.c_str()
-			, fmtLineNumber.c_str()
-			, fmtAddrInfo.c_str()
-			, fmtBaseAddrInfo.c_str()
-		);
-
-		StackWalkReport << stackWalkReportLine << "\n";
+		std::string register_name_hi = "Xmm" + std::to_string(reg) + "_HI";
+		std::string register_name_lo = "Xmm" + std::to_string(reg) + "_LO";
+		eh_report.register_list.push_back({ register_name_hi, (std::uint64_t)pExceptionRecord->ContextRecord->FltSave.XmmRegisters[reg].High, 8 });
+		eh_report.register_list.push_back({ register_name_lo, (std::uint64_t)pExceptionRecord->ContextRecord->FltSave.XmmRegisters[reg].Low, 8 });
 	}
+#endif
+	/* TODO: Ymm/Zmm capture */
 
-	return StackWalkReport.str();
+	return eh_report;
 }
 
 std::string ExceptionManager::ResolveModuleFromAddress(DWORD Address)
@@ -322,96 +439,16 @@ PCHAR ExceptionManager::GetExceptionMessage(PEXCEPTION_POINTERS pExceptionRecord
 #endif
 }
 
-BOOL ExceptionManager::ExceptionNotify(bool isVEH, PEXCEPTION_POINTERS pExceptionRecord)
+BOOL ExceptionManager::ProcessException(bool isVEH, PEXCEPTION_POINTERS pExceptionRecord)
 {
-	auto ExceptionAddress = pExceptionRecord->ExceptionRecord->ExceptionAddress;
-	auto ExceptionCode = pExceptionRecord->ExceptionRecord->ExceptionCode;
-
-	PCHAR Symbol = NULL;
-	PCHAR Message = NULL;
-	CHAR DecodedSymbol[512];
-
-	if (ExceptionCode == 0xE06D7363) /* C++ exception not caught in top level */
+	auto compiled_report = GenerateReport(pExceptionRecord);
+	if (compiled_report.should_ignore == true)
 	{
-		Symbol = GetExceptionSymbol(pExceptionRecord);
-		if (Symbol != NULL)
-		{
-#if (INTPTR_MAX == INT32_MAX)
-			UnDecorateSymbolName(Symbol + 1, DecodedSymbol, sizeof DecodedSymbol, UNDNAME_NO_ARGUMENTS | UNDNAME_32_BIT_DECODE);
-#elif (INTPTR_MAX == INT64_MAX)
-			UnDecorateSymbolName(Symbol + 1, DecodedSymbol, sizeof DecodedSymbol, UNDNAME_NO_ARGUMENTS);
-#endif
-			Symbol = DecodedSymbol;
-			if (std::find(std::begin(g_ehsettings.blacklist_sym), std::end(g_ehsettings.blacklist_sym), std::string(Symbol)) != std::end(g_ehsettings.blacklist_sym))
-			{
-				return TRUE;
-			}
-		}
-		Message = GetExceptionMessage(pExceptionRecord);
+		return TRUE;
 	}
-	sprintf_s(
-		g_ehsettings.report_dst,
-		g_ehsettings.report_dst_size,
-		"[Code = 0x%08X]"      "\n"
-		"[ExceptSymbol = %s]"  "\n"
-		"[Message = %s]"       "\n"
-#if (INTPTR_MAX == INT32_MAX)
-		"[Eip = 0x%08X]"       "\n"
-		"[Eax = 0x%08X]"       "\n"
-		"[Ebx = 0x%08X]"       "\n"
-		"[Ecx = 0x%08X]"       "\n"
-		"[Edx = 0x%08X]"       "\n"
-		"[Esi = 0x%08X]"       "\n"
-		"[Edi = 0x%08X]"       "\n"
-		"[Ebp = 0x%08X]"       "\n"
-		"[Esp = 0x%08X]"       "\n"
 
-		"[Dll Base = 0x%08x]"  "\n"
-#elif (INTPTR_MAX == INT64_MAX)
-		"[Rip = 0x%016llX]"       "\n"
-		"[Rax = 0x%016llX]"       "\n"
-		"[Rbx = 0x%016llX]"       "\n"
-		"[Rcx = 0x%016llX]"       "\n"
-		"[Rdx = 0x%016llX]"       "\n"
-		"[Rsi = 0x%016llX]"       "\n"
-		"[Rdi = 0x%016llX]"       "\n"
-		"[Rbp = 0x%016llX]"       "\n"
-		"[Rsp = 0x%016llX]"       "\n"
-
-		"[Dll Base = 0x%016llX]"  "\n"
-#endif
-		"\n"
-		"%s"
-		, ExceptionCode
-		, Symbol ? Symbol : "NoSym"
-		, Message ? Message : "NoMsg"
-#if (INTPTR_MAX == INT32_MAX)
-		, pExceptionRecord->ContextRecord->Eip
-		, pExceptionRecord->ContextRecord->Eax
-		, pExceptionRecord->ContextRecord->Ebx
-		, pExceptionRecord->ContextRecord->Ecx
-		, pExceptionRecord->ContextRecord->Edx
-		, pExceptionRecord->ContextRecord->Esi
-		, pExceptionRecord->ContextRecord->Edi
-		, pExceptionRecord->ContextRecord->Ebp
-		, pExceptionRecord->ContextRecord->Esp
-		, (DWORD32)g_ehsettings.prog_base
-#elif (INTPTR_MAX == INT64_MAX)
-		, pExceptionRecord->ContextRecord->Rip
-		, pExceptionRecord->ContextRecord->Rax
-		, pExceptionRecord->ContextRecord->Rbx
-		, pExceptionRecord->ContextRecord->Rcx
-		, pExceptionRecord->ContextRecord->Rdx
-		, pExceptionRecord->ContextRecord->Rsi
-		, pExceptionRecord->ContextRecord->Rdi
-		, pExceptionRecord->ContextRecord->Rbp
-		, pExceptionRecord->ContextRecord->Rsp
-		, (DWORD64)g_ehsettings.prog_base
-#endif
-		, StackWalkReport(pExceptionRecord).c_str()
-	);
-
-	g_ehsettings.recv_callback({g_ehreportbuffer, strlen(g_ehreportbuffer), strlen(g_ehreportbuffer) >= EH_REPORTSIZE});
+	auto processed_report = g_ehsettings.proc_callback(compiled_report);
+	g_ehsettings.recv_callback(processed_report);
 
 	return FALSE;
 }
@@ -423,7 +460,7 @@ LONG WINAPI ExceptionManager::TopLevelExceptionHandler(PEXCEPTION_POINTERS pExce
 		return EXCEPTION_CONTINUE_SEARCH;
 	}
 
-	if (ExceptionNotify(false, pExceptionRecord) == TRUE) return EXCEPTION_CONTINUE_SEARCH; // Upon further analysis, this is a non-fatal exception and should be skipped
+	if (ProcessException(false, pExceptionRecord) == TRUE) return EXCEPTION_CONTINUE_SEARCH; // Upon further analysis, this is a non-fatal exception and should be skipped
 
 	exit(1);
 
@@ -437,7 +474,7 @@ LONG WINAPI ExceptionManager::VectoredExceptionHandler(PEXCEPTION_POINTERS pExce
 		return EXCEPTION_CONTINUE_SEARCH;
 	}
 
-	if (ExceptionNotify(true, pExceptionRecord) == TRUE) return EXCEPTION_CONTINUE_SEARCH; // Upon further analysis, this is a non-fatal exception and should be skipped
+	if (ProcessException(true, pExceptionRecord) == TRUE) return EXCEPTION_CONTINUE_SEARCH; // Upon further analysis, this is a non-fatal exception and should be skipped
 
 	exit(1);
 
