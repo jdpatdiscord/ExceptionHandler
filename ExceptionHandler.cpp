@@ -1,5 +1,17 @@
 #include "./ExceptionHandler.hpp"
 
+typedef DWORD64(WINAPI* PGETENABLEDXSTATEFEATURES)();
+typedef BOOL(WINAPI* PINITIALIZECONTEXT)(PVOID Buffer, DWORD ContextFlags, PCONTEXT* Context, PDWORD ContextLength);
+typedef BOOL(WINAPI* PGETXSTATEFEATURESMASK)(PCONTEXT Context, PDWORD64 FeatureMask);
+typedef PVOID(WINAPI* LOCATEXSTATEFEATURE)(PCONTEXT Context, DWORD FeatureId, PDWORD Length);
+typedef BOOL(WINAPI* SETXSTATEFEATURESMASK)(PCONTEXT Context, DWORD64 FeatureMask);
+
+PGETENABLEDXSTATEFEATURES _GetEnabledXStateFeatures = NULL;
+PINITIALIZECONTEXT _InitializeContext = NULL;
+PGETXSTATEFEATURESMASK _GetXStateFeaturesMask = NULL;
+SETXSTATEFEATURESMASK _SetXStateFeaturesMask = NULL;
+LOCATEXSTATEFEATURE _LocateXStateFeature = NULL;
+
 std::uintptr_t PeParser::get_image_base(std::uintptr_t module_base)
 {
 	PIMAGE_DOS_HEADER p_dos_hdr = (PIMAGE_DOS_HEADER)module_base;
@@ -10,7 +22,9 @@ std::uintptr_t PeParser::get_image_base(std::uintptr_t module_base)
 		{
 			return p_nt_hdr->OptionalHeader.ImageBase;
 		}
+		else return NULL;
 	}
+	else return NULL;
 }
 
 std::string SStr_format(const char* fmt, ...)
@@ -60,6 +74,15 @@ std::string ExceptionManager::getBack(const std::string& s, char delim) {
 	while (std::getline(ss, item, delim));
 
 	return item;
+}
+
+bool ExceptionManager::IsXStatePresent()
+{
+	return (_GetEnabledXStateFeatures != NULL &&
+		_InitializeContext        != NULL &&
+		_GetXStateFeaturesMask    != NULL &&
+		_LocateXStateFeature      != NULL &&
+		_SetXStateFeaturesMask    != NULL );
 }
 
 ExceptionManager::EHFinishedReport ExceptionManager::DefaultProcessor(ExceptionManager::EHCompiledReport report)
@@ -126,7 +149,7 @@ ExceptionManager::EHFinishedReport ExceptionManager::DefaultProcessor(ExceptionM
 	}
 	else
 	{
-		return { (char*)"OOM", 3, false, false }; // 3AM code but it works so
+		return { (char*)"OOM", 3, false, false };
 	};
 }
 
@@ -177,6 +200,46 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 		EH_STRREG(Ebp)
 	};
 #elif (INTPTR_MAX == INT64_MAX)
+#if defined (_M_ARM64)
+	stackFrame.AddrPC.Offset = pExceptionRecord->ContextRecord->Pc;
+	stackFrame.AddrStack.Offset = pExceptionRecord->ContextRecord->Sp;
+	stackFrame.AddrFrame.Offset = pExceptionRecord->ContextRecord->Fp;
+
+	for (unsigned r = 0; r < 31; ++r) // yes, 31
+		eh_report.register_list.push_back({ Arm64IndexToNameMap[r], (DWORD64)pExceptionRecord->ContextRecord->X[r], 64 / 8 });
+	eh_report.register_list.push_back({ "Sp", (DWORD64)pExceptionRecord->ContextRecord->Fp, 64 / 8 });
+	eh_report.register_list.push_back({ "Pc", (DWORD64)pExceptionRecord->ContextRecord->Pc, 64 / 8 });
+	eh_report.register_list.push_back({ "Fpcr", (DWORD64)pExceptionRecord->ContextRecord->Fpcr, 32 / 8 });
+	eh_report.register_list.push_back({ "Fpsr", (DWORD64)pExceptionRecord->ContextRecord->Fpsr, 32 / 8 });
+	for (unsigned r = 0; r < ARM64_MAX_BREAKPOINTS; ++r)
+	{
+		eh_report.register_list.push_back({
+			SStr_format("Bcr%i", r),
+			(DWORD32)pExceptionRecord->ContextRecord->Bcr[r],
+			32 / 8
+		});
+		eh_report.register_list.push_back({
+			SStr_format("Bvr%i", r),
+			(DWORD64)pExceptionRecord->ContextRecord->Bvr[r],
+			64 / 8
+		});
+	}
+	for (unsigned r = 0; r < ARM64_MAX_WATCHPOINTS; ++r)
+	{
+		eh_report.register_list.push_back({
+			SStr_format("Wcr%i", r),
+			(DWORD32)pExceptionRecord->ContextRecord->Wcr[r],
+			32 / 8
+		});
+		eh_report.register_list.push_back({
+			SStr_format("Wvr%i", r),
+			(DWORD64)pExceptionRecord->ContextRecord->Wvr[r],
+			64 / 8
+		});
+	}
+
+
+#elif defined (_M_X64)
 	stackFrame.AddrPC.Offset = pExceptionRecord->ContextRecord->Rip;
 	stackFrame.AddrStack.Offset = pExceptionRecord->ContextRecord->Rsp;
 	stackFrame.AddrFrame.Offset = pExceptionRecord->ContextRecord->Rbp;
@@ -203,6 +266,7 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 		EH_STRREG(Rbp)
 	};
 #endif
+#endif
 
 	stackFrame.AddrPC.Mode = AddrModeFlat;
 	stackFrame.AddrStack.Mode = AddrModeFlat;
@@ -221,7 +285,11 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 #if (INTPTR_MAX == INT32_MAX)
 	while (StackWalk(IMAGE_FILE_MACHINE_I386, GetCurrentProcess(), GetCurrentThread(), &stackFrame, pExceptionRecord->ContextRecord, NULL, SymFunctionTableAccess, SymGetModuleBase, NULL))
 #elif (INTPTR_MAX == INT64_MAX)
+#if defined (_M_X64)
 	while (StackWalk64(IMAGE_FILE_MACHINE_AMD64, GetCurrentProcess(), GetCurrentThread(), &stackFrame, pExceptionRecord->ContextRecord, NULL, SymFunctionTableAccess, SymGetModuleBase, NULL))
+#elif defined (_M_ARM64)
+	while (StackWalk64(IMAGE_FILE_MACHINE_ARM64, GetCurrentProcess(), GetCurrentThread(), &stackFrame, pExceptionRecord->ContextRecord, NULL, SymFunctionTableAccess, SymGetModuleBase, NULL))
+#endif
 #endif
 	{
 		EHStackWalkLine this_call;
@@ -313,21 +381,84 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 
 	SymCleanup(GetCurrentProcess());
 
-#if (INTPTR_MAX == INT64_MAX)
-	// ill figure out how to get xmm registers working on 32 bit later
-
-	unsigned n_xmm = (INTPTR_MAX == INT64_MAX) ? 16 : 8;
-
-	for (unsigned reg = 0; reg < n_xmm; ++reg)
+	if (IsXStatePresent()) /* present on Windows 7 SP1+ */
 	{
-		std::string register_name_hi = "Xmm" + std::to_string(reg) + "_HI";
-		std::string register_name_lo = "Xmm" + std::to_string(reg) + "_LO";
-		eh_report.register_list.push_back({ register_name_hi, (std::uint64_t)pExceptionRecord->ContextRecord->FltSave.XmmRegisters[reg].High, 8 });
-		eh_report.register_list.push_back({ register_name_lo, (std::uint64_t)pExceptionRecord->ContextRecord->FltSave.XmmRegisters[reg].Low, 8 });
+#if defined(_M_X64) || defined (_M_IX86)
+		PM128A xmm_array = NULL, ymm_array = NULL, zmm_array = NULL;
+		DWORD xmm_len, ymm_len, zmm_len;
+
+		auto feature_mask = _GetEnabledXStateFeatures();
+		if (feature_mask & XSTATE_LEGACY_SSE)
+			xmm_array = (PM128A)_LocateXStateFeature(pExceptionRecord->ContextRecord, XSTATE_LEGACY_SSE, &xmm_len);
+		if (feature_mask & XSTATE_MASK_AVX)
+			ymm_array = (PM128A)_LocateXStateFeature(pExceptionRecord->ContextRecord, XSTATE_AVX, &ymm_len);
+		if (feature_mask & XSTATE_MASK_AVX512)
+			zmm_array = (PM128A)_LocateXStateFeature(pExceptionRecord->ContextRecord, XSTATE_AVX512_ZMM, &zmm_len);
+
+		if (xmm_array != NULL)
+		{
+			for (unsigned r = 0; r < xmm_len / sizeof(xmm_array[0]); ++r)
+			{
+				eh_report.register_list.push_back({
+					SStr_format("Xmm%i_lo", r),
+					(DWORD64)xmm_array[r].Low,
+					64 / 8
+				});
+				eh_report.register_list.push_back({
+					SStr_format("Xmm%i_hi", r),
+					(DWORD64)xmm_array[r].High,
+					64 / 8
+				});
+			}
+		}
+		if (ymm_array != NULL)
+		{
+			for (unsigned r = 0; r < ymm_len / sizeof(ymm_array[0]); ++r)
+			{
+				eh_report.register_list.push_back({
+					SStr_format("Ymm%i_lo", r),
+					(DWORD64)ymm_array[r].Low,
+					64 / 8
+				});
+				eh_report.register_list.push_back({
+					SStr_format("Ymm%i_hi", r),
+					(DWORD64)ymm_array[r].High,
+					64 / 8
+				});
+			}
+		}
+		if (zmm_array != NULL) // tbd
+		{
+			for (unsigned r = 0; r < zmm_len / sizeof(zmm_array[0]); ++r)
+			{
+				
+			}
+		}
+#elif defined(_M_ARM64)
+		// none for XState
+#endif
+	}
+	else
+	{
+		//printf("Not Windows 7 SP1+\n");
+	}
+
+#if defined(_M_ARM64)
+	// armv8-a spec has NEON and VFP as mandatory features; no need to check if it is available
+	for (unsigned r = 0; r < 32; ++r)
+	{
+		eh_report.register_list.push_back({
+			SStr_format("d%i_lo", r),
+			(DWORD64)pExceptionRecord->ContextRecord->V[r].D[0],
+			64 / 8
+		});
+		eh_report.register_list.push_back({
+			SStr_format("d%i_hi", r),
+			(DWORD64)pExceptionRecord->ContextRecord->V[r].D[1],
+			64 / 8
+		});
 	}
 #endif
-	/* TODO: Ymm/Zmm capture */
-
 	return eh_report;
 }
 
@@ -483,6 +614,15 @@ LONG WINAPI ExceptionManager::VectoredExceptionHandler(PEXCEPTION_POINTERS pExce
 
 void ExceptionManager::Init(EHSettings* settings)
 {
+	auto kernel32_handle = GetModuleHandleA("kernel32.dll");
+	if (kernel32_handle != NULL)
+	{
+		_GetEnabledXStateFeatures = (PGETENABLEDXSTATEFEATURES)GetProcAddress(kernel32_handle, "GetEnabledXStateFeatures");
+		_InitializeContext = (PINITIALIZECONTEXT)GetProcAddress(kernel32_handle, "InitializeContext");
+		_GetXStateFeaturesMask = (PGETXSTATEFEATURESMASK)GetProcAddress(kernel32_handle, "GetXStateFeaturesMask");
+		_LocateXStateFeature = (LOCATEXSTATEFEATURE)GetProcAddress(kernel32_handle, "LocateXStateFeature");
+		_SetXStateFeaturesMask = (SETXSTATEFEATURESMASK)GetProcAddress(kernel32_handle, "SetXStateFeaturesMask");
+	}
 	g_ehsettings = *settings;
 	if (g_ehsettings.report_dst == NULL) g_ehsettings.report_dst = g_ehreportbuffer;
 	if (g_ehsettings.report_dst_size == NULL) g_ehsettings.report_dst_size = EH_REPORTSIZE;
@@ -496,14 +636,22 @@ void ExceptionManager::Init(EHSettings* settings)
 	if (g_ehsettings.use_seh == true) 
 	{
 		typedef VOID(WINAPI* TopLevelException)(LPTOP_LEVEL_EXCEPTION_FILTER lpTopLevelExceptionFilter);
-		TopLevelException RtlSetUnhandledExceptionFilter = (TopLevelException)GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlSetUnhandledExceptionFilter");
-		RtlSetUnhandledExceptionFilter(TopLevelExceptionHandler);
+		auto ntdll_handle = GetModuleHandleA("ntdll.dll");
+		if (ntdll_handle != NULL)
+		{
+			TopLevelException RtlSetUnhandledExceptionFilter = (TopLevelException)GetProcAddress(ntdll_handle, "RtlSetUnhandledExceptionFilter");
+			RtlSetUnhandledExceptionFilter(TopLevelExceptionHandler);
+		}
 	}
 	if (g_ehsettings.use_veh == true)
 	{
 		typedef VOID(WINAPI* VectoredException)(ULONG First, PVECTORED_EXCEPTION_HANDLER lpVectorExceptionFilter);
-		VectoredException RtlAddVectoredExceptionHandler = (VectoredException)GetProcAddress(GetModuleHandleA("ntdll.dll"), "RtlAddVectoredExceptionHandler");
-		RtlAddVectoredExceptionHandler(0, VectoredExceptionHandler);
+		auto ntdll_handle = GetModuleHandleA("ntdll.dll");
+		if (ntdll_handle != NULL)
+		{
+			VectoredException RtlAddVectoredExceptionHandler = (VectoredException)GetProcAddress(ntdll_handle, "RtlAddVectoredExceptionHandler");
+			RtlAddVectoredExceptionHandler(0, VectoredExceptionHandler);
+		}
 	}
 
 	return;
