@@ -23,8 +23,13 @@ int main(int argc, char* argv[])
 
 	ExceptionManager::Init(&settings);
 
-	//*(int*)(0) = 0;
-	throw std::runtime_error("This is a test");
+#if defined(_M_X64) || defined(_M_ARM64)
+	//*(uint64_t*)(0xABABCDCDEFEF2244) = 0xFFEEDDCCBBAA0022;
+#elif defined(_M_IX86)
+	//*(uint64_t*)(0xAABBCCDD) = 0xEEFF2244;
+#endif
+	throw std::runtime_error("This is a test (runtime_error)");
+	//throw std::invalid_argument("This is a test (invalid_argument)");
 
 	return 0;
 };
