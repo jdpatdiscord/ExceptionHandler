@@ -15,9 +15,6 @@ How to Use & Usage Requirements:</br>
 2. Add `dbghelp.lib` to the linker input in the project config</br>
 3. Set the C++ Language Standard to C++17 (This is currently required)</br>
 
-Todo:</br>
-1. Complete, test and release AVX-512 support</br>
-2. Backport to C for portability</br>
-3. Provide a JSON output option for crash details</br>
+The work that needs to be done on this project is in the form of GitHub issues. Please see the issues page on what needs to be done.
 
 Some parts of this are incomplete but the project is functional. Runs on 10,000+ machines!
