@@ -9,9 +9,7 @@
 #include <string>
 #include <vector>
 #include <fstream>
-#include <filesystem>
 #include <sstream>
-#include <optional>
 #include <map>
 
 #define EH_REPORTSIZE 16384
@@ -60,7 +58,6 @@ namespace PeParser
 std::string SStr_format(const char* fmt, ...);
 
 #define EH_STRREG(EHREG) {#EHREG, EHREG, sizeof(decltype(EHREG))}
-#define EH_XMMSTRREG(EHARRAY, EHINDEX) { "Xmm" #EHINDEX "_HI", EHARRAY[EHINDEX].High}, {"Xmm" #EHINDEX "_LO", EHARRAY[EHINDEX].Low}
 
 namespace ExceptionManager
 {
@@ -68,25 +65,25 @@ namespace ExceptionManager
 
 	struct EHStackWalkLine
 	{
-		std::uintptr_t address;
-		std::optional<std::uintptr_t> module_base_address;
-		std::optional<std::string> module_name;
-		std::optional<std::string> source_file_name;
-		std::optional<std::string> function_symbol;
-		std::optional<std::int32_t> line;
+		uintptr_t address = NULL;
+		uintptr_t module_base_address = NULL;
+		std::string module_name = "";
+		std::string source_file_name = "";
+		std::string function_symbol = "";
+		std::int32_t line = -1;
 	};
 
 	struct EHCompiledReport
 	{
 		std::vector<EHStackWalkLine> complete_callstack;
 		std::vector<EHRegister> register_list;
-		std::uint32_t eh_exception_code;
-		std::uintptr_t eh_fault_address;
-		std::string eh_psuedo_name;
-		std::optional<std::string> eh_cpp_exception_symbol;
-		std::optional<std::string> eh_cpp_exception_message;
+		std::uint32_t eh_exception_code = NULL;
+		std::uintptr_t eh_fault_address = NULL;
+		//std::string eh_psuedo_name = "";
+		std::string eh_cpp_exception_symbol = "";
+		std::string eh_cpp_exception_message = "";
 
-		bool should_ignore;
+		bool should_ignore = false;
 	};
 
 	struct EHFinishedReport
@@ -101,7 +98,7 @@ namespace ExceptionManager
 
 		EHFinishedReport()
 		{
-			memset(this, 0, sizeof *this);
+			memset(this, 0, sizeof(EHFinishedReport));
 		}
 	};
 
@@ -112,9 +109,9 @@ namespace ExceptionManager
 	{
 		std::vector<std::uintptr_t> blacklist_code;
 		std::vector<std::string> blacklist_sym;
-		std::optional<std::string> prog_name;
-		std::uintptr_t prog_base; /* handle */
-		std::uintptr_t prog_size; 
+		std::string prog_name = "";
+		uintptr_t prog_base; /* handle */
+		uintptr_t prog_size; 
 		eh_receiver_callback recv_callback;
 		eh_processor_callback proc_callback;
 		char* report_dst;

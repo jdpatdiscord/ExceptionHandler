@@ -1,0 +1,6 @@
+[submodule "addons/pugixml_xml_tester/pugixml"]
+	path = addons/pugixml_xml_tester/pugixml
+	url = https://github.com/zeux/pugixml
+[submodule "addons/nlohmann_json_tester/json"]
+	path = addons/nlohmann_json_tester/json
+	url = https://github.com/nlohmann/json

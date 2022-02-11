@@ -79,10 +79,10 @@ std::string ExceptionManager::getBack(const std::string& s, char delim) {
 bool ExceptionManager::IsXStatePresent()
 {
 	return (_GetEnabledXStateFeatures != NULL &&
-		_InitializeContext        != NULL &&
-		_GetXStateFeaturesMask    != NULL &&
-		_LocateXStateFeature      != NULL &&
-		_SetXStateFeaturesMask    != NULL );
+		_InitializeContext != NULL &&
+		_GetXStateFeaturesMask != NULL &&
+		_LocateXStateFeature != NULL &&
+		_SetXStateFeaturesMask != NULL);
 }
 
 ExceptionManager::EHFinishedReport ExceptionManager::DefaultProcessor(ExceptionManager::EHCompiledReport report)
@@ -90,27 +90,30 @@ ExceptionManager::EHFinishedReport ExceptionManager::DefaultProcessor(ExceptionM
 	std::string string_trace = "";
 	std::string string_register_list = "";
 
-	for (auto& stack_line : report.complete_callstack)
+	for (EHStackWalkLine& stack_line : report.complete_callstack)
 	{
-		std::string string_address = SStr_format("0x%p", stack_line.module_base_address.has_value() ? stack_line.module_base_address.value() : NULL);
-		std::string string_module_name = stack_line.module_name.has_value() ? stack_line.module_name.value().c_str() : string_address.c_str();
+		std::string string_address = SStr_format("0x%p", stack_line.module_base_address);
+		std::string string_module_name = stack_line.module_name != "" ? stack_line.module_name.c_str() : string_address.c_str();
 
 		std::string string_line = SStr_format(
 			"Addr: (%s) + 0x%p, Base: 0x%p, Line: %i, Func: %s, File: %s\n",
 			string_module_name.c_str(),
 			stack_line.address,
-			stack_line.module_base_address.has_value() ? stack_line.module_base_address.value() : NULL,
-			stack_line.line.has_value() ? stack_line.line.value() : -1,
-			stack_line.function_symbol.has_value() ? stack_line.function_symbol.value().c_str() : "NoFunc",
-			stack_line.source_file_name.has_value() ? stack_line.source_file_name.value().c_str() : "NoFile"
+			stack_line.module_base_address,
+			stack_line.line != 0 ? stack_line.line : -1,
+			stack_line.function_symbol != "" ? stack_line.function_symbol.c_str() : "NoFunc",
+			stack_line.source_file_name != "" ? stack_line.source_file_name.c_str() : "NoFile"
 		);
 
 		string_trace += string_line;
 	}
 
-	for (auto& reg : report.register_list)
+	for (EHRegister& reg : report.register_list)
 	{
-		auto &[reg_name, reg_value, reg_size] = reg;
+		std::string& reg_name = std::get<0>(reg);
+		uintptr_t reg_value = std::get<1>(reg);
+		size_t reg_size = std::get<2>(reg);
+
 		if (reg_size == 4)
 		{
 			string_register_list += SStr_format("4-byte register %s: 0x%08X\n", reg_name.c_str(), reg_value);
@@ -123,8 +126,8 @@ ExceptionManager::EHFinishedReport ExceptionManager::DefaultProcessor(ExceptionM
 	string_register_list += "\n";
 
 	std::string string_address = SStr_format((INTPTR_MAX == INT64_MAX) ? "%016llX" : "%08X", report.eh_fault_address);
-	std::string string_symbol = report.eh_cpp_exception_symbol.has_value() ? SStr_format("ExceptionSymbol: %s\n", report.eh_cpp_exception_symbol.value().c_str()) : "";
-	std::string string_message = report.eh_cpp_exception_message.has_value() ? SStr_format("ExceptionMessage: %s\n", report.eh_cpp_exception_message.value().c_str()) : "";
+	std::string string_symbol = report.eh_cpp_exception_symbol != "" ? SStr_format("ExceptionSymbol: %s\n", report.eh_cpp_exception_symbol.c_str()) : "";
+	std::string string_message = report.eh_cpp_exception_message != "" ? SStr_format("ExceptionMessage: %s\n", report.eh_cpp_exception_message.c_str()) : "";
 	std::string report_header = SStr_format(
 		"ExceptionCode: %08X\n"
 		"ExceptionAddress: %s\n"
@@ -237,8 +240,6 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 			64 / 8
 		});
 	}
-
-
 #elif defined (_M_X64)
 	stackFrame.AddrPC.Offset = pExceptionRecord->ContextRecord->Rip;
 	stackFrame.AddrStack.Offset = pExceptionRecord->ContextRecord->Rsp;
@@ -295,7 +296,7 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 		EHStackWalkLine this_call;
 
 		CHAR module_name[MAX_PATH];
-		PCHAR symbolName;
+		//PCHAR symbolName;
 		PCHAR file_name;
 		DWORD line_number;
 
@@ -328,16 +329,15 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 #if (INTPTR_MAX == INT32_MAX)
 		DWORD32 disp;
 		if (SymGetSymFromAddr(GetCurrentProcess(), stackFrame.AddrPC.Offset, (PDWORD)&disp, symbol))
-		{
 #elif (INTPTR_MAX == INT64_MAX)
 		DWORD64 disp;
 		if (SymGetSymFromAddr(GetCurrentProcess(), stackFrame.AddrPC.Offset, (PDWORD64)&disp, symbol))
-		{
 #endif
+		{
 			this_call.function_symbol = symbol->Name;
 		}
 
-		std::uintptr_t file_address = stackFrame.AddrPC.Offset - (std::uintptr_t)module_mem_base;
+		uintptr_t file_address = stackFrame.AddrPC.Offset - (uintptr_t)module_mem_base;
 
 		this_call.address = file_address;
 
@@ -345,9 +345,9 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 	}
 
 	eh_report.complete_callstack = eh_callstack;
-	eh_report.eh_fault_address = (std::uintptr_t)pExceptionRecord->ExceptionRecord->ExceptionAddress;
-	eh_report.eh_exception_code = (std::uint32_t)pExceptionRecord->ExceptionRecord->ExceptionCode;
-	
+	eh_report.eh_fault_address = (uintptr_t)pExceptionRecord->ExceptionRecord->ExceptionAddress;
+	eh_report.eh_exception_code = (uint32_t)pExceptionRecord->ExceptionRecord->ExceptionCode;
+
 	if (eh_report.eh_exception_code == 0xE06D7363)
 	{
 		PCHAR temp_symbol = NULL;
@@ -364,18 +364,18 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 #endif
 			temp_symbol = exception_symbol;
 
-			if (std::find(std::begin(g_ehsettings.blacklist_sym), std::end(g_ehsettings.blacklist_sym), std::string(temp_symbol)) != std::end(g_ehsettings.blacklist_sym))
+			if (std::find(std::begin(g_ehsettings.blacklist_sym), std::end(g_ehsettings.blacklist_sym), (std::string)temp_symbol) != std::end(g_ehsettings.blacklist_sym))
 			{
 				eh_report.should_ignore = true;
 			}
 
-			eh_report.eh_cpp_exception_symbol = std::string(temp_symbol);
+			eh_report.eh_cpp_exception_symbol = (std::string)temp_symbol;
 		}
 
 		temp_message = GetExceptionMessage(pExceptionRecord);
 		if (temp_message != NULL)
 		{
-			eh_report.eh_cpp_exception_message = std::string(temp_message);
+			eh_report.eh_cpp_exception_message = (std::string)temp_symbol;
 		}
 	}
 
@@ -387,7 +387,7 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 		PM128A xmm_array = NULL, ymm_array = NULL, zmm_array = NULL;
 		DWORD xmm_len, ymm_len, zmm_len;
 
-		auto feature_mask = _GetEnabledXStateFeatures();
+		DWORD64 feature_mask = _GetEnabledXStateFeatures();
 		if (feature_mask & XSTATE_LEGACY_SSE)
 			xmm_array = (PM128A)_LocateXStateFeature(pExceptionRecord->ContextRecord, XSTATE_LEGACY_SSE, &xmm_len);
 		if (feature_mask & XSTATE_MASK_AVX)
@@ -397,66 +397,40 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 
 		if (xmm_array != NULL)
 		{
-			for (unsigned r = 0; r < xmm_len / sizeof(xmm_array[0]); ++r)
+			for (unsigned r = 0; r < xmm_len / sizeof(xmm_array[0]); r += 1)
 			{
-				eh_report.register_list.push_back({
-					SStr_format("Xmm%i_lo", r),
-					(DWORD64)xmm_array[r].Low,
-					64 / 8
-				});
-				eh_report.register_list.push_back({
-					SStr_format("Xmm%i_hi", r),
-					(DWORD64)xmm_array[r].High,
-					64 / 8
-				});
+				eh_report.register_list.push_back({ SStr_format("xmm%i_%i", r, 0), (DWORD64)xmm_array[r].Low,  64 / 8 });
+				eh_report.register_list.push_back({ SStr_format("xmm%i_%i", r, 1), (DWORD64)xmm_array[r].High, 64 / 8 });
 			}
 		}
 		if (ymm_array != NULL)
 		{
-			for (unsigned r = 0; r < ymm_len / sizeof(ymm_array[0]); ++r)
+			for (unsigned r = 0; r < ymm_len / sizeof(ymm_array[0]); r += 1)
 			{
-				eh_report.register_list.push_back({
-					SStr_format("Ymm%i_lo", r),
-					(DWORD64)ymm_array[r].Low,
-					64 / 8
-				});
-				eh_report.register_list.push_back({
-					SStr_format("Ymm%i_hi", r),
-					(DWORD64)ymm_array[r].High,
-					64 / 8
-				});
+				eh_report.register_list.push_back({ SStr_format("ymm%i_%i", r, 0), (DWORD64)ymm_array[r].Low,  64 / 8 });
+				eh_report.register_list.push_back({ SStr_format("ymm%i_%i", r, 1), (DWORD64)ymm_array[r].High, 64 / 8 });
 			}
 		}
-		if (zmm_array != NULL) // tbd
+		if (zmm_array != NULL) // needs to be tested
 		{
-			for (unsigned r = 0; r < zmm_len / sizeof(zmm_array[0]); ++r)
+			for (unsigned r = 0; r < zmm_len / sizeof(zmm_array[0]); r += 2)
 			{
-				
+				M128A zmmx_lo = zmm_array[r + 0];
+				M128A zmmx_hi = zmm_array[r + 1];
+				eh_report.register_list.push_back({ SStr_format("zmm%i_%i", r, 0), (DWORD64)zmmx_lo.Low,  64 / 8 });
+				eh_report.register_list.push_back({ SStr_format("zmm%i_%i", r, 1), (DWORD64)zmmx_lo.High, 64 / 8 });
+				eh_report.register_list.push_back({ SStr_format("zmm%i_%i", r, 2), (DWORD64)zmmx_hi.Low,  64 / 8 });
+				eh_report.register_list.push_back({ SStr_format("zmm%i_%i", r, 3), (DWORD64)zmmx_hi.High, 64 / 8 });
 			}
 		}
-#elif defined(_M_ARM64)
-		// none for XState
+	}
 #endif
-	}
-	else
-	{
-		//printf("Not Windows 7 SP1+\n");
-	}
-
 #if defined(_M_ARM64)
 	// armv8-a spec has NEON and VFP as mandatory features; no need to check if it is available
 	for (unsigned r = 0; r < 32; ++r)
 	{
-		eh_report.register_list.push_back({
-			SStr_format("d%i_lo", r),
-			(DWORD64)pExceptionRecord->ContextRecord->V[r].D[0],
-			64 / 8
-		});
-		eh_report.register_list.push_back({
-			SStr_format("d%i_hi", r),
-			(DWORD64)pExceptionRecord->ContextRecord->V[r].D[1],
-			64 / 8
-		});
+		eh_report.register_list.push_back({ SStr_format("d%i_lo", r), (DWORD64)pExceptionRecord->ContextRecord->V[r].D[0], 64 / 8 });
+		eh_report.register_list.push_back({ SStr_format("d%i_hi", r), (DWORD64)pExceptionRecord->ContextRecord->V[r].D[1], 64 / 8 });
 	}
 #endif
 	return eh_report;
@@ -470,17 +444,17 @@ std::string ExceptionManager::ResolveModuleFromAddress(DWORD Address)
 	HANDLE hProcess;
 	DWORD cbNeeded;
 
-	auto processID = GetCurrentProcessId();
+	DWORD processID = GetCurrentProcessId();
 
 	hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processID);
-	
+
 	if (EnumProcessModules(hProcess, hMods, sizeof(hMods), &cbNeeded))
 	{
 		for (unsigned m = 0; m < (cbNeeded / sizeof(HMODULE)); m++)
 		{
 			MODULEINFO modInfo;
 			GetModuleInformation(hProcess, hMods[m], &modInfo, sizeof(MODULEINFO));
-			auto BaseAddress = std::uintptr_t(modInfo.lpBaseOfDll);
+			uintptr_t BaseAddress = (uintptr_t)modInfo.lpBaseOfDll;
 			if (Address > BaseAddress && Address < (BaseAddress + modInfo.SizeOfImage))
 			{
 				char ModuleName[MAX_PATH];
@@ -516,24 +490,24 @@ PCHAR ExceptionManager::GetExceptionSymbol(PEXCEPTION_POINTERS pExceptionRecord)
 	}
 	return NULL;
 #elif (INTPTR_MAX == INT64_MAX)
-	if (auto pcount = pExceptionRecord->ExceptionRecord->NumberParameters; pcount >= 4)
+	DWORD numparams = pExceptionRecord->ExceptionRecord->NumberParameters;
+	if (numparams >= 4)
 	{
-		if (auto syminfo = pExceptionRecord->ExceptionRecord->ExceptionInformation[2]; syminfo != NULL)
+		ULONG_PTR syminfo = pExceptionRecord->ExceptionRecord->ExceptionInformation[2];
+		if (syminfo != NULL)
 		{
-			auto base = pExceptionRecord->ExceptionRecord->ExceptionInformation[3];
-			if (auto offset = *(DWORD*)(syminfo + 0x0C); offset != NULL)
+			ULONG_PTR base = pExceptionRecord->ExceptionRecord->ExceptionInformation[3];
+			DWORD offset = *(DWORD*)(syminfo + 0x0C);
+			if (offset != NULL)
 			{
-				auto sym_struct1 = base + offset;
+				ULONG_PTR sym_struct1 = base + offset;
 				if (sym_struct1 != NULL)
 				{
-					auto sym_struct2 = base + *(DWORD*)(sym_struct1 + 0x04);
+					ULONG_PTR sym_struct2 = base + *(DWORD*)(sym_struct1 + 0x04);
 					if (sym_struct2 != NULL)
 					{
-						auto sym_struct3 = base + *(DWORD*)(sym_struct2 + 0x04);
-						if (sym_struct3 != NULL)
-						{
-							return (PCHAR)(sym_struct3 + 0x10);
-						}
+						ULONG_PTR sym_struct3 = base + *(DWORD*)(sym_struct2 + 0x04);
+						return (PCHAR)(sym_struct3 + 0x10);
 					}
 				}
 			}
@@ -559,26 +533,23 @@ PCHAR ExceptionManager::GetExceptionMessage(PEXCEPTION_POINTERS pExceptionRecord
 	}
 	return Message;
 #elif (INTPTR_MAX == INT64_MAX)
-	// screw the struct, gettin reclass medieval on it
-	std::uintptr_t pxc = (std::uintptr_t)pExceptionRecord;
-	std::uintptr_t pxc_0 = *(std::uintptr_t*)(pxc + 0);
-	if (std::uintptr_t pxc_0 = *(std::uintptr_t*)(pxc + 0); pxc_0 != NULL)
-		if (std::uintptr_t pxc_0_28 = *(std::uintptr_t*)(pxc_0 + 0x28); pxc_0_28 != NULL)
-			if (std::uintptr_t pxc_0_28_8 = *(std::uintptr_t*)(pxc_0_28 + 0x8); pxc_0_28_8 != NULL)
-				return (PCHAR)pxc_0_28_8;
-	return NULL;
+	ULONG_PTR ExceptionInfo_Unk1 = pExceptionRecord->ExceptionRecord->ExceptionInformation[1];
+	if (ExceptionInfo_Unk1 != NULL)
+	{
+		return *(PCHAR*)(ExceptionInfo_Unk1 + 0x08);
+	}
 #endif
 }
 
 BOOL ExceptionManager::ProcessException(bool isVEH, PEXCEPTION_POINTERS pExceptionRecord)
 {
-	auto compiled_report = GenerateReport(pExceptionRecord);
+	EHCompiledReport compiled_report = GenerateReport(pExceptionRecord);
 	if (compiled_report.should_ignore == true)
 	{
 		return TRUE;
 	}
 
-	auto processed_report = g_ehsettings.proc_callback(compiled_report);
+	EHFinishedReport processed_report = g_ehsettings.proc_callback(compiled_report);
 	g_ehsettings.recv_callback(processed_report);
 
 	return FALSE;
@@ -614,7 +585,7 @@ LONG WINAPI ExceptionManager::VectoredExceptionHandler(PEXCEPTION_POINTERS pExce
 
 void ExceptionManager::Init(EHSettings* settings)
 {
-	auto kernel32_handle = GetModuleHandleA("kernel32.dll");
+	HMODULE kernel32_handle = GetModuleHandleA("kernel32.dll");
 	if (kernel32_handle != NULL)
 	{
 		_GetEnabledXStateFeatures = (PGETENABLEDXSTATEFEATURES)GetProcAddress(kernel32_handle, "GetEnabledXStateFeatures");
@@ -633,10 +604,10 @@ void ExceptionManager::Init(EHSettings* settings)
 		GetModuleInformation(GetCurrentProcess(), (HMODULE)g_ehsettings.prog_base, &mi, sizeof(MODULEINFO));
 		g_ehsettings.prog_size = mi.SizeOfImage;
 	}
-	if (g_ehsettings.use_seh == true) 
+	if (g_ehsettings.use_seh == true)
 	{
 		typedef VOID(WINAPI* TopLevelException)(LPTOP_LEVEL_EXCEPTION_FILTER lpTopLevelExceptionFilter);
-		auto ntdll_handle = GetModuleHandleA("ntdll.dll");
+		HMODULE ntdll_handle = GetModuleHandleA("ntdll.dll");
 		if (ntdll_handle != NULL)
 		{
 			TopLevelException RtlSetUnhandledExceptionFilter = (TopLevelException)GetProcAddress(ntdll_handle, "RtlSetUnhandledExceptionFilter");
@@ -646,7 +617,7 @@ void ExceptionManager::Init(EHSettings* settings)
 	if (g_ehsettings.use_veh == true)
 	{
 		typedef VOID(WINAPI* VectoredException)(ULONG First, PVECTORED_EXCEPTION_HANDLER lpVectorExceptionFilter);
-		auto ntdll_handle = GetModuleHandleA("ntdll.dll");
+		HMODULE ntdll_handle = GetModuleHandleA("ntdll.dll");
 		if (ntdll_handle != NULL)
 		{
 			VectoredException RtlAddVectoredExceptionHandler = (VectoredException)GetProcAddress(ntdll_handle, "RtlAddVectoredExceptionHandler");
