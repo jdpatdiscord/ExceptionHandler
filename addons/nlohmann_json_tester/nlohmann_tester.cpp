@@ -6,10 +6,11 @@ ExceptionManager::EHFinishedReport json_reporter(ExceptionManager::EHCompiledRep
 
 	ehjson["exception_code"] = report.eh_exception_code;
 	ehjson["fault_address"] = report.eh_fault_address;
-	if (report.eh_cpp_exception_message != "")
+	if (report.eh_exception_code == 0xE06D7363)
+	{
 		ehjson["cpp_exception_message"] = report.eh_cpp_exception_message;
-	if (report.eh_cpp_exception_symbol != "")
 		ehjson["cpp_exception_symbol"] = report.eh_cpp_exception_symbol;
+	}
 
 	ehjson["registers"] = {};
 
@@ -31,6 +32,7 @@ ExceptionManager::EHFinishedReport json_reporter(ExceptionManager::EHCompiledRep
 		std::string call_name = std::string("call_") + std::to_string(calln);
 		ehjson["callstack"][call_name] = {};
 		ehjson["callstack"][call_name].emplace("address", callo.address);
+		ehjson["callstack"][call_name].emplace("number", calln);
 		if (callo.function_symbol != "") 
 			ehjson["callstack"][call_name].emplace("function_symbol", callo.function_symbol);
 		if (callo.line != -1)

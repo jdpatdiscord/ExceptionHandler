@@ -375,7 +375,7 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 		temp_message = GetExceptionMessage(pExceptionRecord);
 		if (temp_message != NULL)
 		{
-			eh_report.eh_cpp_exception_message = (std::string)temp_symbol;
+			eh_report.eh_cpp_exception_message = (std::string)temp_message;
 		}
 	}
 
