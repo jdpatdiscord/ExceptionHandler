@@ -11,6 +11,20 @@
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <algorithm>
+#include <memory>
+
+#if !defined(XSTATE_AVX512_KMASK) && !defined(XSTATE_AVX512_ZMM_H) && !defined(XSTATE_AVX512_ZMM)
+#define XSTATE_AVX512_KMASK                 (5)
+#define XSTATE_AVX512_ZMM_H                 (6)
+#define XSTATE_AVX512_ZMM                   (7)
+#endif
+
+#ifndef XSTATE_MASK_AVX512
+#define XSTATE_MASK_AVX512                  ((1ull << (XSTATE_AVX512_KMASK)) | \
+                                             (1ull << (XSTATE_AVX512_ZMM_H)) | \
+                                             (1ull << (XSTATE_AVX512_ZMM)))
+#endif
 
 #define EH_REPORTSIZE 16384
 

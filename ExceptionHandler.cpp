@@ -22,9 +22,8 @@ std::uintptr_t PeParser::get_image_base(std::uintptr_t module_base)
 		{
 			return p_nt_hdr->OptionalHeader.ImageBase;
 		}
-		else return NULL;
 	}
-	else return NULL;
+	return NULL;
 }
 
 std::string SStr_format(const char* fmt, ...)
