@@ -13,7 +13,7 @@ Features:</br>
 How to Use & Usage Requirements:</br>
 1. See `tester_demo.cpp` on how to initialize the project</br>
 2. Add `dbghelp.lib` to the linker input in the project config</br>
-3. Set the C++ Language Standard to C++17 (This is currently required)</br>
+3. Set the C++ Language Standard to C++14 (This is currently required)</br>
 
 The work that needs to be done on this project is in the form of GitHub issues. Please see the issues page on what needs to be done.
 
