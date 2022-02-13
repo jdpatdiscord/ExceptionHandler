@@ -110,7 +110,7 @@ ExceptionManager::EHFinishedReport ExceptionManager::DefaultProcessor(ExceptionM
 	for (EHRegister& reg : report.register_list)
 	{
 		std::string& reg_name = std::get<0>(reg);
-		uintptr_t reg_value = std::get<1>(reg);
+		uint64_t reg_value = std::get<1>(reg);
 		size_t reg_size = std::get<2>(reg);
 
 		if (reg_size == 4)
