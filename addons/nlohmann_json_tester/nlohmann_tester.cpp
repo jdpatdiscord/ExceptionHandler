@@ -16,12 +16,9 @@ ExceptionManager::EHFinishedReport json_reporter(ExceptionManager::EHCompiledRep
 
 	for (auto& reg : report.register_list)
 	{
-		auto reg_name = std::get<0>(reg);
-		auto reg_value = std::get<1>(reg);
-		auto reg_size = std::get<2>(reg);
-		ehjson["registers"][reg_name] = {};
-		ehjson["registers"][reg_name].emplace("value", reg_value);
-		ehjson["registers"][reg_name].emplace("size", reg_size);
+		ehjson["registers"][reg.reg_name] = {};
+		ehjson["registers"][reg.reg_name].emplace("value", reg.reg_value);
+		ehjson["registers"][reg.reg_name].emplace("size", reg.reg_size);
 	}
 
 	ehjson["callstack"] = {};
@@ -56,6 +53,7 @@ ExceptionManager::EHFinishedReport json_reporter(ExceptionManager::EHCompiledRep
 	return ExceptionManager::EHFinishedReport( report_buf, res.size(), false, true );
 }
 
+#ifndef _WINDLL
 int main(int argc, char* argv[])
 {
 	ExceptionManager::EHSettings settings = {
@@ -68,7 +66,7 @@ int main(int argc, char* argv[])
 		(std::uintptr_t)GetModuleHandle(NULL),         /* base */
 		NULL,                                          /* attempts to get prog size for you if NULL */
 		ExceptionManager::DefaultHandler,              /* report handler: what to do with the finished report */
-		json_reporter,            /* report parser: how to generate the finished report */
+		json_reporter,                                 /* report parser: how to generate the finished report */
 		NULL,                                          /* inbuilt report location */
 		NULL,                                          /* inbuilt report size */
 		false,                                         /* is this a DLL?: */
@@ -88,3 +86,33 @@ int main(int argc, char* argv[])
 
 	return 0;
 }
+#else
+BOOL APIENTRY DllMain(HMODULE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
+{
+	if (fdwReason == DLL_PROCESS_ATTACH)
+	{
+		DisableThreadLibraryCalls(hinstDLL);
+
+		ExceptionManager::EHSettings settings = {
+			{ 0x80000004,
+			  0x80000006,
+			  0x40010006,
+			  0x406D1388 },                                /* blacklisted codes*/
+			{ },                                           /* blacklisted symbols */
+			"Lol",                                         /* program name std::optional */
+			(std::uintptr_t)GetModuleHandle(NULL),         /* base */
+			NULL,                                          /* attempts to get prog size for you if NULL */
+			ExceptionManager::DefaultHandler,              /* report handler: what to do with the finished report */
+			json_reporter,                                 /* report parser: how to generate the finished report */
+			NULL,                                          /* inbuilt report location */
+			NULL,                                          /* inbuilt report size */
+			true ,                                         /* is this a DLL?: */
+			true,                                          /* use SEH?: */
+			false,                                         /* use VEH?: */
+		};
+
+		ExceptionManager::Init(&settings);
+	}
+	return TRUE;
+}
+#endif

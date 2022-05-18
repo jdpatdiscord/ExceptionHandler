@@ -12,6 +12,19 @@ PGETXSTATEFEATURESMASK _GetXStateFeaturesMask = NULL;
 SETXSTATEFEATURESMASK _SetXStateFeaturesMask = NULL;
 LOCATEXSTATEFEATURE _LocateXStateFeature = NULL;
 
+__declspec(noinline) bool bStackBytesAvailable(size_t amount)
+{
+	ULONG_PTR low, high;
+	ULONG guarantee = 0;
+	GetCurrentThreadStackLimits(&low, &high);
+	ULONG_PTR remaining = (ULONG_PTR)&low - low;
+	if (remaining > high - low) {
+		__fastfail(FAST_FAIL_INCORRECT_STACK);
+	}
+	SetThreadStackGuarantee(&guarantee);
+	return remaining >= amount + guarantee;
+}
+
 std::uintptr_t PeParser::get_image_base(std::uintptr_t module_base)
 {
 	PIMAGE_DOS_HEADER p_dos_hdr = (PIMAGE_DOS_HEADER)module_base;
@@ -109,17 +122,13 @@ ExceptionManager::EHFinishedReport ExceptionManager::DefaultProcessor(ExceptionM
 
 	for (EHRegister& reg : report.register_list)
 	{
-		std::string& reg_name = std::get<0>(reg);
-		uint64_t reg_value = std::get<1>(reg);
-		size_t reg_size = std::get<2>(reg);
-
-		if (reg_size == 4)
+		if (reg.reg_size == 4)
 		{
-			string_register_list += SStr_format("4-byte register %s: 0x%08X\n", reg_name.c_str(), reg_value);
+			string_register_list += SStr_format("4-byte register %s: 0x%08X\n", reg.reg_name.c_str(), reg.reg_value);
 		}
-		if (reg_size == 8)
+		if (reg.reg_size == 8)
 		{
-			string_register_list += SStr_format("8-byte register %s: 0x%016llX\n", reg_name.c_str(), reg_value);
+			string_register_list += SStr_format("8-byte register %s: 0x%016llX\n", reg.reg_name.c_str(), reg.reg_value);
 		}
 	}
 	string_register_list += "\n";
@@ -416,10 +425,10 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 			{
 				M128A zmmx_lo = zmm_array[r + 0];
 				M128A zmmx_hi = zmm_array[r + 1];
-				eh_report.register_list.push_back({ SStr_format("zmm%i_%i", r, 0), (DWORD64)zmmx_lo.Low,  64 / 8 });
-				eh_report.register_list.push_back({ SStr_format("zmm%i_%i", r, 1), (DWORD64)zmmx_lo.High, 64 / 8 });
-				eh_report.register_list.push_back({ SStr_format("zmm%i_%i", r, 2), (DWORD64)zmmx_hi.Low,  64 / 8 });
-				eh_report.register_list.push_back({ SStr_format("zmm%i_%i", r, 3), (DWORD64)zmmx_hi.High, 64 / 8 });
+				eh_report.register_list.push_back(EHRegister( SStr_format("zmm%i_%i", r, 0), (DWORD64)zmmx_lo.Low,  64 / 8 ));
+				eh_report.register_list.push_back(EHRegister( SStr_format("zmm%i_%i", r, 1), (DWORD64)zmmx_lo.High, 64 / 8 ));
+				eh_report.register_list.push_back(EHRegister( SStr_format("zmm%i_%i", r, 2), (DWORD64)zmmx_hi.Low,  64 / 8 ));
+				eh_report.register_list.push_back(EHRegister( SStr_format("zmm%i_%i", r, 3), (DWORD64)zmmx_hi.High, 64 / 8 ));
 			}
 		}
 	}
@@ -533,10 +542,7 @@ PCHAR ExceptionManager::GetExceptionMessage(PEXCEPTION_POINTERS pExceptionRecord
 	return Message;
 #elif (INTPTR_MAX == INT64_MAX)
 	ULONG_PTR ExceptionInfo_Unk1 = pExceptionRecord->ExceptionRecord->ExceptionInformation[1];
-	if (ExceptionInfo_Unk1 != NULL)
-	{
-		return *(PCHAR*)(ExceptionInfo_Unk1 + 0x08);
-	}
+	return *(PCHAR*)(ExceptionInfo_Unk1 + 0x08);
 #endif
 }
 
@@ -554,32 +560,87 @@ BOOL ExceptionManager::ProcessException(bool isVEH, PEXCEPTION_POINTERS pExcepti
 	return FALSE;
 }
 
-LONG WINAPI ExceptionManager::TopLevelExceptionHandler(PEXCEPTION_POINTERS pExceptionRecord)
+struct ThreadParams
 {
-	if (std::find(std::begin(g_ehsettings.blacklist_code), std::end(g_ehsettings.blacklist_code), pExceptionRecord->ExceptionRecord->ExceptionCode) != std::end(g_ehsettings.blacklist_code))
+	bool isVEH;
+	PEXCEPTION_POINTERS pEH;
+	DWORD* ret;
+};
+
+void EH_ThreadFunction(void* arg)
+{
+	ThreadParams* args = (ThreadParams*)arg;
+	PEXCEPTION_POINTERS pExceptionRecord = args->pEH;
+	if (std::find(std::begin(ExceptionManager::g_ehsettings.blacklist_code), std::end(ExceptionManager::g_ehsettings.blacklist_code), pExceptionRecord->ExceptionRecord->ExceptionCode) != std::end(ExceptionManager::g_ehsettings.blacklist_code))
 	{
-		return EXCEPTION_CONTINUE_SEARCH;
+		*args->ret = EXCEPTION_CONTINUE_SEARCH;
+		return;
 	}
 
-	if (ProcessException(false, pExceptionRecord) == TRUE) return EXCEPTION_CONTINUE_SEARCH; // Upon further analysis, this is a non-fatal exception and should be skipped
+	if (ExceptionManager::ProcessException(args->isVEH, pExceptionRecord) == TRUE)
+	{
+		*args->ret = EXCEPTION_CONTINUE_SEARCH; // Upon further analysis, this is a non-fatal exception and should be skipped
+		return;
+	}
 
-	exit(1);
+	*args->ret = EXCEPTION_NONCONTINUABLE_EXCEPTION;
+	return;
+}
 
-	return EXCEPTION_NONCONTINUABLE_EXCEPTION;
+LONG WINAPI ExceptionManager::TopLevelExceptionHandler(PEXCEPTION_POINTERS pExceptionRecord)
+{
+	DWORD ret;
+	ThreadParams params;
+	params.ret = &ret;
+	params.isVEH = false;
+	params.pEH = pExceptionRecord;
+
+	HANDLE eh_thread = CreateThread(NULL, 0x10000, (LPTHREAD_START_ROUTINE)EH_ThreadFunction, (void*)&params, NULL, NULL);
+	WaitForSingleObject(eh_thread, INFINITE);
+
+	if (ret == EXCEPTION_NONCONTINUABLE_EXCEPTION)
+	{
+		exit(pExceptionRecord->ExceptionRecord->ExceptionCode);
+	}
+
+	return ret;
 }
 
 LONG WINAPI ExceptionManager::VectoredExceptionHandler(PEXCEPTION_POINTERS pExceptionRecord)
 {
-	if (std::find(std::begin(g_ehsettings.blacklist_code), std::end(g_ehsettings.blacklist_code), pExceptionRecord->ExceptionRecord->ExceptionCode) != std::end(g_ehsettings.blacklist_code))
+	DWORD ret;
+	ThreadParams params;
+	params.ret = &ret;
+	params.isVEH = true;
+	params.pEH = pExceptionRecord;
+
+	HANDLE eh_thread = CreateThread(NULL, 0x10000, (LPTHREAD_START_ROUTINE)EH_ThreadFunction, (void*)&params, NULL, NULL);
+	WaitForSingleObject(eh_thread, INFINITE);
+
+	if (ret == EXCEPTION_NONCONTINUABLE_EXCEPTION)
 	{
-		return EXCEPTION_CONTINUE_SEARCH;
+		exit(pExceptionRecord->ExceptionRecord->ExceptionCode);
 	}
 
-	if (ProcessException(true, pExceptionRecord) == TRUE) return EXCEPTION_CONTINUE_SEARCH; // Upon further analysis, this is a non-fatal exception and should be skipped
+	return ret;
+	/*if (pExceptionRecord->ExceptionRecord->ExceptionCode == STATUS_STACK_OVERFLOW)
+	{
+		HANDLE Event = RegisterEventSourceA(NULL, EH_EVENTNAME);
+		PCHAR EventString = (PCHAR)malloc(0x100);
 
-	exit(1);
-
-	return EXCEPTION_NONCONTINUABLE_EXCEPTION;
+		if (EventString != NULL)
+		{
+			//sprintf_s(EventString, 0x100, "")
+			if (Event != NULL)
+			{
+				ReportEventA(Event, EVENTLOG_ERROR_TYPE, 0, 0, NULL, 1, 0, &EventString, NULL);
+				free(EventString);
+				CloseHandle(Event);
+			}
+			// Event == NULL
+			free(EventString);
+		}
+	}*/
 }
 
 void ExceptionManager::Init(EHSettings* settings)

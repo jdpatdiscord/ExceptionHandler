@@ -36,13 +36,9 @@ ExceptionManager::EHFinishedReport xml_reporter(ExceptionManager::EHCompiledRepo
 	pugi::xml_node x_registers = ehdoc.append_child("registers");
 	for (auto& reg : report.register_list)
 	{
-		auto reg_name = std::get<0>(reg);
-		auto reg_value = std::get<1>(reg);
-		auto reg_size = std::get<2>(reg);
-
-		pugi::xml_node x_reg = x_registers.append_child(reg_name.c_str());
-		x_reg.append_attribute("value").set_value(reg_value);
-		x_reg.append_attribute("size").set_value(reg_size);
+		pugi::xml_node x_reg = x_registers.append_child(reg.reg_name.c_str());
+		x_reg.append_attribute("value").set_value(reg.reg_value);
+		x_reg.append_attribute("size").set_value(reg.reg_size);
 	}
 
 	pugi::xml_node x_callstack = ehdoc.append_child("callstack");
@@ -74,6 +70,7 @@ ExceptionManager::EHFinishedReport xml_reporter(ExceptionManager::EHCompiledRepo
 	return { report_buf, res.size(), false, true };
 }
 
+#ifndef _WINDLL
 int main(int argc, char* argv[])
 {
 	ExceptionManager::EHSettings settings = {
@@ -106,3 +103,33 @@ int main(int argc, char* argv[])
 
 	return 0;
 }
+#else
+BOOL APIENTRY DllMain(HMODULE hinstDLL, DWORD fdwReason, LPVOID lpReserved)
+{
+	if (fdwReason == DLL_PROCESS_ATTACH)
+	{
+		DisableThreadLibraryCalls(hinstDLL);
+		
+		ExceptionManager::EHSettings settings = {
+			{ 0x80000004,
+			  0x80000006,
+			  0x40010006,
+			  0x406D1388 },                                /* blacklisted codes*/
+			{ },                                           /* blacklisted symbols */
+			"Lol",                                         /* program name std::optional */
+			(std::uintptr_t)GetModuleHandle(NULL),         /* base */
+			NULL,                                          /* attempts to get prog size for you if NULL */
+			ExceptionManager::DefaultHandler,              /* report handler: what to do with the finished report */
+			xml_reporter,                                  /* report parser: how to generate the finished report */
+			NULL,                                          /* inbuilt report location */
+			NULL,                                          /* inbuilt report size */
+			true ,                                         /* is this a DLL?: */
+			true,                                          /* use SEH?: */
+			true,                                          /* use VEH?: */
+		};
+
+		ExceptionManager::Init(&settings);
+	}
+	return TRUE;
+}
+#endif

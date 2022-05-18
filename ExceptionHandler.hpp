@@ -26,6 +26,7 @@
                                              (1ull << (XSTATE_AVX512_ZMM)))
 #endif
 
+#define EH_EVENTNAME "ExceptionHandler Built" " @ " __TIME__ " " __DATE__
 #define EH_REPORTSIZE 16384
 
 #if defined(_M_ARM64)
@@ -75,7 +76,15 @@ std::string SStr_format(const char* fmt, ...);
 
 namespace ExceptionManager
 {
-	typedef std::tuple<std::string, std::uint64_t, std::size_t> EHRegister;
+	struct EHRegister
+	{
+		std::string reg_name;
+		std::uint64_t reg_value;
+		std::size_t reg_size;
+
+		EHRegister(std::string name, std::uint64_t value, std::size_t size)
+			: reg_name(name), reg_value(value), reg_size(size) { }
+	};
 
 	struct EHStackWalkLine
 	{
@@ -110,10 +119,8 @@ namespace ExceptionManager
 		EHFinishedReport(char* report_string, size_t report_size, bool clipped, bool should_free)
 			: report_string(report_string), report_size(report_size), clipped(clipped), should_free(should_free) { }
 
-		EHFinishedReport()
-		{
-			memset(this, 0, sizeof(EHFinishedReport));
-		}
+		EHFinishedReport() :
+			report_string(NULL), report_size(NULL), clipped(NULL), should_free(NULL) { }
 	};
 
 	typedef void(*eh_receiver_callback)(EHFinishedReport);
