@@ -63,11 +63,18 @@ ExceptionManager::EHFinishedReport xml_reporter(ExceptionManager::EHCompiledRepo
 	
 	std::string res = node_to_string(ehdoc);
 
-	char* report_buf = (char*)malloc(res.size() + 1);
-	memset(report_buf, 0, res.size() + 1);
-	memcpy(report_buf, res.c_str(), res.size());
-
-	return { report_buf, res.size(), false, true };
+	char* report_buf = (char*)calloc(res.size() + 1, 1);
+	if (report_buf != NULL)
+	{
+		memset(report_buf, 0, res.size() + 1);
+		memcpy(report_buf, res.c_str(), res.size());
+		return ExceptionManager::EHFinishedReport( report_buf, res.size(), false, true );
+	}
+	else
+	{
+		const char* OOMMessage = "OOM while returning";
+		return ExceptionManager::EHFinishedReport( (char*)OOMMessage, res.size(), false, false);
+	}
 }
 
 #ifndef _WINDLL
@@ -98,6 +105,7 @@ int main(int argc, char* argv[])
 #elif defined(_M_IX86)
 	//*(uint64_t*)(0xAABBCCDD) = 0xEEFF2244;
 #endif
+
 	throw std::runtime_error("This is a test (runtime_error)");
 	//throw std::invalid_argument("This is a test (invalid_argument)");
 

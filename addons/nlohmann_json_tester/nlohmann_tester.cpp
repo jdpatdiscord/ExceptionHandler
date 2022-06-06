@@ -45,12 +45,18 @@ ExceptionManager::EHFinishedReport json_reporter(ExceptionManager::EHCompiledRep
 	}
 
 	std::string res = ehjson.dump(4);
-
-	char* report_buf = (char*)malloc(res.size() + 1);
-	memset(report_buf, 0, res.size() + 1);
-	memcpy(report_buf, res.c_str(), res.size());
-
-	return ExceptionManager::EHFinishedReport( report_buf, res.size(), false, true );
+	char* report_buf = (char*)calloc(res.size() + 1, 1);
+	if (report_buf != NULL)
+	{
+		memset(report_buf, 0, res.size() + 1);
+		memcpy(report_buf, res.c_str(), res.size());
+		return ExceptionManager::EHFinishedReport(report_buf, res.size(), false, true);
+	}
+	else
+	{
+		const char* OOMMessage = "OOM while returning";
+		return { (char*)OOMMessage, strlen(OOMMessage), false, false };
+	}
 }
 
 #ifndef _WINDLL

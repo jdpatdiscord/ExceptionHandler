@@ -12,19 +12,6 @@ PGETXSTATEFEATURESMASK _GetXStateFeaturesMask = NULL;
 SETXSTATEFEATURESMASK _SetXStateFeaturesMask = NULL;
 LOCATEXSTATEFEATURE _LocateXStateFeature = NULL;
 
-__declspec(noinline) bool bStackBytesAvailable(size_t amount)
-{
-	ULONG_PTR low, high;
-	ULONG guarantee = 0;
-	GetCurrentThreadStackLimits(&low, &high);
-	ULONG_PTR remaining = (ULONG_PTR)&low - low;
-	if (remaining > high - low) {
-		__fastfail(FAST_FAIL_INCORRECT_STACK);
-	}
-	SetThreadStackGuarantee(&guarantee);
-	return remaining >= amount + guarantee;
-}
-
 std::uintptr_t PeParser::get_image_base(std::uintptr_t module_base)
 {
 	PIMAGE_DOS_HEADER p_dos_hdr = (PIMAGE_DOS_HEADER)module_base;
@@ -589,14 +576,22 @@ void EH_ThreadFunction(void* arg)
 
 LONG WINAPI ExceptionManager::TopLevelExceptionHandler(PEXCEPTION_POINTERS pExceptionRecord)
 {
-	DWORD ret;
+	DWORD ret = EXCEPTION_NONCONTINUABLE_EXCEPTION;
 	ThreadParams params;
 	params.ret = &ret;
 	params.isVEH = false;
 	params.pEH = pExceptionRecord;
 
 	HANDLE eh_thread = CreateThread(NULL, 0x10000, (LPTHREAD_START_ROUTINE)EH_ThreadFunction, (void*)&params, NULL, NULL);
-	WaitForSingleObject(eh_thread, INFINITE);
+	if (eh_thread != NULL)
+	{
+		WaitForSingleObject(eh_thread, INFINITE);
+	}
+	else
+	{
+		// well shit
+		__fastfail(GetLastError());
+	}
 
 	if (ret == EXCEPTION_NONCONTINUABLE_EXCEPTION)
 	{
