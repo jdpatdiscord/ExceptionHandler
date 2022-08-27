@@ -1,15 +1,9 @@
 #include "./ExceptionHandler.hpp"
 
 typedef DWORD64(WINAPI* PGETENABLEDXSTATEFEATURES)();
-typedef BOOL(WINAPI* PINITIALIZECONTEXT)(PVOID Buffer, DWORD ContextFlags, PCONTEXT* Context, PDWORD ContextLength);
-typedef BOOL(WINAPI* PGETXSTATEFEATURESMASK)(PCONTEXT Context, PDWORD64 FeatureMask);
 typedef PVOID(WINAPI* LOCATEXSTATEFEATURE)(PCONTEXT Context, DWORD FeatureId, PDWORD Length);
-typedef BOOL(WINAPI* SETXSTATEFEATURESMASK)(PCONTEXT Context, DWORD64 FeatureMask);
 
 PGETENABLEDXSTATEFEATURES _GetEnabledXStateFeatures = NULL;
-PINITIALIZECONTEXT _InitializeContext = NULL;
-PGETXSTATEFEATURESMASK _GetXStateFeaturesMask = NULL;
-SETXSTATEFEATURESMASK _SetXStateFeaturesMask = NULL;
 LOCATEXSTATEFEATURE _LocateXStateFeature = NULL;
 
 std::uintptr_t PeParser::get_image_base(std::uintptr_t module_base)
@@ -77,11 +71,7 @@ std::string ExceptionManager::getBack(const std::string& s, char delim) {
 
 bool ExceptionManager::IsXStatePresent()
 {
-	return (_GetEnabledXStateFeatures != NULL &&
-		_InitializeContext != NULL &&
-		_GetXStateFeaturesMask != NULL &&
-		_LocateXStateFeature != NULL &&
-		_SetXStateFeaturesMask != NULL);
+	return (_GetEnabledXStateFeatures != NULL && _LocateXStateFeature != NULL);
 }
 
 ExceptionManager::EHFinishedReport ExceptionManager::DefaultProcessor(ExceptionManager::EHCompiledReport report)
@@ -392,7 +382,7 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 
 		if (xmm_array != NULL)
 		{
-			for (unsigned r = 0; r < xmm_len / sizeof(xmm_array[0]); r += 1)
+			for (unsigned r = 0; r < xmm_len / sizeof(*xmm_array); r += 1)
 			{
 				eh_report.register_list.push_back({ SStr_format("xmm%i_%i", r, 0), (DWORD64)xmm_array[r].Low,  64 / 8 });
 				eh_report.register_list.push_back({ SStr_format("xmm%i_%i", r, 1), (DWORD64)xmm_array[r].High, 64 / 8 });
@@ -400,7 +390,7 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 		}
 		if (ymm_array != NULL)
 		{
-			for (unsigned r = 0; r < ymm_len / sizeof(ymm_array[0]); r += 1)
+			for (unsigned r = 0; r < ymm_len / sizeof(*ymm_array); r += 1)
 			{
 				eh_report.register_list.push_back({ SStr_format("ymm%i_%i", r, 0), (DWORD64)ymm_array[r].Low,  64 / 8 });
 				eh_report.register_list.push_back({ SStr_format("ymm%i_%i", r, 1), (DWORD64)ymm_array[r].High, 64 / 8 });
@@ -408,7 +398,7 @@ ExceptionManager::EHCompiledReport ExceptionManager::GenerateReport(PEXCEPTION_P
 		}
 		if (zmm_array != NULL) // needs to be tested
 		{
-			for (unsigned r = 0; r < zmm_len / sizeof(zmm_array[0]); r += 2)
+			for (unsigned r = 0; r < zmm_len / sizeof(*zmm_array); r += 2)
 			{
 				M128A zmmx_lo = zmm_array[r + 0];
 				M128A zmmx_hi = zmm_array[r + 1];
@@ -644,10 +634,7 @@ void ExceptionManager::Init(EHSettings* settings)
 	if (kernel32_handle != NULL)
 	{
 		_GetEnabledXStateFeatures = (PGETENABLEDXSTATEFEATURES)GetProcAddress(kernel32_handle, "GetEnabledXStateFeatures");
-		_InitializeContext = (PINITIALIZECONTEXT)GetProcAddress(kernel32_handle, "InitializeContext");
-		_GetXStateFeaturesMask = (PGETXSTATEFEATURESMASK)GetProcAddress(kernel32_handle, "GetXStateFeaturesMask");
 		_LocateXStateFeature = (LOCATEXSTATEFEATURE)GetProcAddress(kernel32_handle, "LocateXStateFeature");
-		_SetXStateFeaturesMask = (SETXSTATEFEATURESMASK)GetProcAddress(kernel32_handle, "SetXStateFeaturesMask");
 	}
 	g_ehsettings = *settings;
 	if (g_ehsettings.report_dst == NULL) g_ehsettings.report_dst = g_ehreportbuffer;
