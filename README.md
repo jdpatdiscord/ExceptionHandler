@@ -18,3 +18,5 @@ How to Use & Usage Requirements:</br>
 The work that needs to be done on this project is in the form of GitHub issues. Please see the issues page on what needs to be done.
 
 Some parts of this are incomplete but the project is functional. Runs on 10,000+ machines!
+
+NOTE: As this project currently depends on dbghelp.lib, any bugs within dbghelp.lib will apply to this project. Thankfully it is generally reliable, but there is an edge case that may cause Microsoft's library to crash on projects built with MinGW. I have tried to use my connections to elevate the bug within Microsoft, but they unfortunately had opinions and blamed me for expecting it to work, their reasoning being that it is a non-Microsoft tool chain (despite it working most of the time anyways). If you run into issues, sorry!
