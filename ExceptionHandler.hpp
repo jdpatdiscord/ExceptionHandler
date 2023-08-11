@@ -6,11 +6,14 @@
 #include <DbgHelp.h>
 #include <Psapi.h>
 
+#include <Zydis/Zydis.h>
+
 #include <string>
 #include <vector>
 #include <fstream>
 #include <sstream>
 #include <map>
+#include <cstdint>
 #include <algorithm>
 #include <memory>
 
@@ -79,7 +82,7 @@ namespace ExceptionManager
 	struct EHRegister
 	{
 		std::string reg_name;
-		std::uint64_t reg_value;
+		std::int64_t reg_value;
 		std::size_t reg_size;
 
 		EHRegister(std::string name, std::uint64_t value, std::size_t size)
@@ -88,8 +91,8 @@ namespace ExceptionManager
 
 	struct EHStackWalkLine
 	{
-		uintptr_t address = NULL;
-		uintptr_t module_base_address = NULL;
+		uintptr_t address = 0;
+		uintptr_t module_base_address = 0;
 		std::string module_name = "";
 		std::string source_file_name = "";
 		std::string function_symbol = "";
@@ -100,8 +103,8 @@ namespace ExceptionManager
 	{
 		std::vector<EHStackWalkLine> complete_callstack;
 		std::vector<EHRegister> register_list;
-		std::uint32_t eh_exception_code = NULL;
-		std::uintptr_t eh_fault_address = NULL;
+		std::uint32_t eh_exception_code = 0;
+		std::uintptr_t eh_fault_address = 0;
 		//std::string eh_psuedo_name = "";
 		std::string eh_cpp_exception_symbol = "";
 		std::string eh_cpp_exception_message = "";
@@ -120,7 +123,7 @@ namespace ExceptionManager
 			: report_string(report_string), report_size(report_size), clipped(clipped), should_free(should_free) { }
 
 		EHFinishedReport() :
-			report_string(NULL), report_size(NULL), clipped(NULL), should_free(NULL) { }
+			report_string(NULL), report_size(0), clipped(false), should_free(false) { }
 	};
 
 	typedef void(*eh_receiver_callback)(EHFinishedReport);

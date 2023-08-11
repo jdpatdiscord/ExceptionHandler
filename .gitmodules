@@ -4,3 +4,6 @@
 [submodule "addons/nlohmann_json_tester/json"]
 	path = addons/nlohmann_json_tester/json
 	url = https://github.com/nlohmann/json
+[submodule "zydis"]
+	path = zydis
+	url = https://github.com/zyantific/zydis
